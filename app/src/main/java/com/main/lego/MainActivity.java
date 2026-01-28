@@ -160,15 +160,17 @@ public final class MainActivity extends AppCompatActivity {
                 this$0.getBinding().co.setText("[특이] 6개월 내 채무 " + (Math.round(this$0.bCost * 10) / 10.0d) + '%');
             }
             if (Intrinsics.areEqual(this$0.baby, "0")) {
-                this$0.baby = "135";
+                this$0.baby = "154";
             } else if (Intrinsics.areEqual(this$0.baby, "1")) {
-                this$0.baby = "220";
+                this$0.baby = "252";
             } else if (Intrinsics.areEqual(this$0.baby, ExifInterface.GPS_MEASUREMENT_2D)) {
-                this$0.baby = "285";
+                this$0.baby = "322";
             } else if (Intrinsics.areEqual(this$0.baby, ExifInterface.GPS_MEASUREMENT_3D)) {
-                this$0.baby = "245";
+                this$0.baby = "390";
             } else if (Intrinsics.areEqual(this$0.baby, "4")) {
-                this$0.baby = "400";
+                this$0.baby = "453";
+            } else if (Intrinsics.areEqual(this$0.baby, "5")) {
+                this$0.baby = "513";
             }
             long round = Math.round((i / this$0.acost) / 12.0d);
             double d = 12;
