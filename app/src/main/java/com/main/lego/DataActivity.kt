@@ -1,0 +1,20 @@
+package com.main.lego
+
+import android.content.Intent
+import android.os.Bundle
+import androidx.appcompat.app.AppCompatActivity
+import com.main.lego.databinding.ActivityDataBinding
+
+class DataActivity : AppCompatActivity() {
+    lateinit var binding: ActivityDataBinding
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        binding = ActivityDataBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        binding.buttonSelectFile.setOnClickListener {
+            startActivity(Intent(this, MainActivity::class.java))
+        }
+    }
+}

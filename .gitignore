@@ -1,0 +1,51 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE - Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+.idea_modules/
+
+# Local configuration
+local.properties
+
+# Keystore files
+*.jks
+*.keystore
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# APK/AAB files
+*.apk
+*.aab
+*.ap_
+
+# Native
+.externalNativeBuild/
+.cxx/
+
+# Captures
+captures/
+
+# Proguard
+proguard/
+
+# Log files
+*.log
+
+# Kotlin
+.kotlin/
+
+# Claude Code
+.claude/
