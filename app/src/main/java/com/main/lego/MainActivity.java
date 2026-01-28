@@ -169,7 +169,7 @@ public final class MainActivity extends AppCompatActivity {
                 this$0.baby = "390";
             } else if (Intrinsics.areEqual(this$0.baby, "4")) {
                 this$0.baby = "453";
-            } else if (Intrinsics.areEqual(this$0.baby, "5")) {
+            } else {
                 this$0.baby = "513";
             }
             long round = Math.round((i / this$0.acost) / 12.0d);
