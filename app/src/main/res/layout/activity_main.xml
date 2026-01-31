@@ -28,308 +28,63 @@
             android:layout_height="wrap_content">
             <TextView
                 android:textSize="15sp"
-                android:ellipsize="end"
+                android:textColor="#000000"
                 android:id="@+id/name"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="10dp"/>
             <TextView
                 android:textSize="15sp"
-                android:ellipsize="end"
+                android:textColor="#000000"
                 android:id="@+id/card"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"/>
             <TextView
                 android:textSize="15sp"
-                android:ellipsize="end"
+                android:textColor="#000000"
                 android:id="@+id/dat"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"/>
             <TextView
                 android:textSize="15sp"
-                android:ellipsize="end"
+                android:textColor="#000000"
                 android:id="@+id/money"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="10dp"/>
             <TextView
                 android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/co"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/baby"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/parent"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
+                android:textColor="#000000"
                 android:id="@+id/use"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"/>
             <TextView
                 android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/bae"
+                android:textColor="#000000"
+                android:id="@+id/test1"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"/>
             <TextView
                 android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/bae2"
+                android:textColor="#000000"
+                android:id="@+id/test2"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"/>
             <TextView
                 android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/before"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
+                android:textColor="#000000"
                 android:id="@+id/half"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="10dp"/>
             <TextView
                 android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/test1"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/test2"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
+                android:textColor="#000000"
                 android:id="@+id/testing"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="50dp"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/group"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
                 android:layout_marginBottom="10dp"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/local"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/work"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/moneyn"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/mmoney"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/car"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/carb"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/check"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/mun"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/unable"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"/>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/some"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"/>
-            <ImageView
-                android:id="@+id/imageview"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:scaleType="fitCenter"/>
-            <TextView
-                android:textSize="20sp"
-                android:ellipsize="end"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:layout_marginBottom="10dp"
-                android:text="[대출과목]"/>
-            <LinearLayout
-                android:orientation="horizontal"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content">
-                <TextView
-                    android:textSize="15sp"
-                    android:ellipsize="end"
-                    android:id="@+id/bname"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginRight="10dp"/>
-                <TextView
-                    android:textSize="15sp"
-                    android:ellipsize="end"
-                    android:id="@+id/bco"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginRight="10dp"/>
-                <TextView
-                    android:textSize="15sp"
-                    android:ellipsize="end"
-                    android:id="@+id/pco"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginRight="10dp"/>
-                <TextView
-                    android:textSize="15sp"
-                    android:ellipsize="end"
-                    android:id="@+id/bmon"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"/>
-            </LinearLayout>
-            <TextView
-                android:textSize="20sp"
-                android:ellipsize="end"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:layout_marginBottom="10dp"
-                android:text="[카드]"/>
-            <LinearLayout
-                android:orientation="horizontal"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content">
-                <TextView
-                    android:textSize="15sp"
-                    android:ellipsize="end"
-                    android:id="@+id/test"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginRight="10dp"/>
-                <TextView
-                    android:textSize="15sp"
-                    android:ellipsize="end"
-                    android:id="@+id/ccost"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginRight="10dp"/>
-            </LinearLayout>
-            <TextView
-                android:textSize="20sp"
-                android:ellipsize="end"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:layout_marginBottom="10dp"
-                android:text="[따로변제]"/>
-            <LinearLayout
-                android:orientation="horizontal"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content">
-                <TextView
-                    android:textSize="15sp"
-                    android:ellipsize="end"
-                    android:id="@+id/dda1"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginRight="10dp"/>
-                <TextView
-                    android:textSize="15sp"
-                    android:ellipsize="end"
-                    android:id="@+id/dda2"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginRight="10dp"/>
-                <TextView
-                    android:textSize="15sp"
-                    android:ellipsize="end"
-                    android:id="@+id/dda3"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"/>
-                <TextView
-                    android:textSize="15sp"
-                    android:ellipsize="end"
-                    android:id="@+id/dda4"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"/>
-            </LinearLayout>
-            <TextView
-                android:textSize="15sp"
-                android:ellipsize="end"
-                android:id="@+id/more"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
-        </LinearLayout>
-        <!-- 직접입력 및 계산하기 버튼 - 숨김 처리 (코드 참조용) -->
-        <LinearLayout
-            android:orientation="vertical"
-            android:visibility="gone"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content">
-            <EditText android:id="@+id/mhouse" android:layout_width="0dp" android:layout_height="0dp"/>
-            <EditText android:id="@+id/bhouse" android:layout_width="0dp" android:layout_height="0dp"/>
-            <EditText android:id="@+id/mcar" android:layout_width="0dp" android:layout_height="0dp"/>
-            <EditText android:id="@+id/bcar" android:layout_width="0dp" android:layout_height="0dp"/>
-            <EditText android:id="@+id/bill" android:layout_width="0dp" android:layout_height="0dp"/>
-            <EditText android:id="@+id/moneyy" android:layout_width="0dp" android:layout_height="0dp"/>
-            <EditText android:id="@+id/moneym" android:layout_width="0dp" android:layout_height="0dp"/>
-            <EditText android:id="@+id/total" android:layout_width="0dp" android:layout_height="0dp"/>
-            <EditText android:id="@+id/btotal" android:layout_width="0dp" android:layout_height="0dp"/>
-            <Button android:id="@+id/cost" android:layout_width="0dp" android:layout_height="0dp"/>
         </LinearLayout>
         <Button
             android:id="@+id/copy"
