@@ -5,14 +5,14 @@ plugins {
 
 android {
     namespace = "com.main.lego"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.main.lego"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 5
-        versionName = "1.0"
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -74,6 +74,10 @@ dependencies {
 
     // HWP file parser
     implementation("kr.dogfoot:hwplib:1.1.1")
+    implementation("androidx.activity:activity:1.12.2")
+
+    // PDF text extraction
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

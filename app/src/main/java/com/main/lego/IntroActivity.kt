@@ -20,5 +20,7 @@ class IntroActivity : AppCompatActivity() {
             startActivity(Intent(this, DataActivity::class.java))
             finish()
         }, SPLASH_TIMEOUT)
+
+        supportActionBar?.hide()
     }
 }

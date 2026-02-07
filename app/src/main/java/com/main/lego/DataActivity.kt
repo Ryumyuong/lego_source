@@ -16,5 +16,7 @@ class DataActivity : AppCompatActivity() {
         binding.buttonSelectFile.setOnClickListener {
             startActivity(Intent(this, MainActivity::class.java))
         }
+
+        supportActionBar?.hide()
     }
 }
