@@ -11,7 +11,7 @@ import java.net.URL
 
 object AiDataExtractor {
     private const val TAG = "AI_EXTRACT"
-    private const val API_KEY = "AIzaSyCVmA-Mb_2vOjFLH47EQAbP6rKjeQ8SbMk"
+    private const val API_KEY = "AIzaSyDn3b79UFzoG_QgxASi0dpHwkePBAvqXiw"
     private const val API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$API_KEY"
 
     data class ExtractResult(
@@ -37,6 +37,12 @@ object AiDataExtractor {
     }
 
     fun extract(text: String, listener: OnExtractListener?) {
+        // 텍스트 길이 제한 (API 요청 크기 초과 방지)
+        val truncatedText = if (text.length > 30000) {
+            Log.w(TAG, "텍스트 길이 초과: ${text.length}자 → 30000자로 제한")
+            text.take(30000)
+        } else text
+
         val prompt = """다음 텍스트에서 정보를 추출하세요. 결과는 만원 단위 정수입니다.
 
 [1] 월소득
@@ -230,7 +236,7 @@ D) 변제계획안 존재 여부 (hasRecoveryPlan)
 {"income": 숫자, "targetDebt": 숫자, "property": 숫자, "nonAffiliatedDebt": 0, "creditorCount": 숫자, "defermentMonths": 숫자, "sogumwonMonthly": 숫자, "recentDebt": 숫자, "majorCreditor": "문자열", "majorCreditorDebt": 숫자, "hasBusinessHistory": true/false, "businessStartYear": 숫자, "businessEndYear": 숫자, "hasRecoveryPlan": true/false}
 
 텍스트:
-$text"""
+$truncatedText"""
 
         Thread {
             try {
@@ -331,7 +337,12 @@ $text"""
                         BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() }
                     } ?: "응답 없음"
                     Log.e(TAG, "API 오류: $responseCode, $errorStream")
-                    listener?.onError("API 오류: $responseCode")
+                    // 에러 상세 내용 파싱
+                    val errorDetail = try {
+                        val errJson = JSONObject(errorStream)
+                        errJson.optJSONObject("error")?.optString("message", "") ?: ""
+                    } catch (e: Exception) { "" }
+                    listener?.onError("API 오류 $responseCode: $errorDetail")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "AI 추출 실패: ${e.message}")

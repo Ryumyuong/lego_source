@@ -9,6 +9,9 @@ class DataActivity : AppCompatActivity() {
     lateinit var binding: ActivityDataBinding
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(
+            androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO
+        )
         super.onCreate(savedInstanceState)
         binding = ActivityDataBinding.inflate(layoutInflater)
         setContentView(binding.root)

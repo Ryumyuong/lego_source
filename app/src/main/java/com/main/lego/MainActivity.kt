@@ -27,6 +27,8 @@ import java.io.FileOutputStream
 import java.util.Calendar
 import java.util.regex.Pattern
 
+
+
 class MainActivity : AppCompatActivity() {
 
     companion object {
@@ -89,6 +91,8 @@ class MainActivity : AppCompatActivity() {
         supportActionBar?.hide()
 
         binding.buttonSelectFile.setOnClickListener {
+            // 데이터 리셋
+            resetAllData()
             pendingUriList.clear()
             val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
                 type = "*/*"
@@ -1891,6 +1895,34 @@ class MainActivity : AppCompatActivity() {
             append(binding.test2.text).append("\n\n")
             append(binding.testing.text)
         }
+    }
+
+    private fun resetAllData() {
+        // 멤버 변수 초기화
+        acost = 0; bCost = 0.0; bValue = 0; card = 0; cost = 0; value = 0
+        baby = "0"; korea = "X"
+
+        // AI 데이터 초기화
+        aiIncome = 0; aiTargetDebt = 0; aiProperty = 0
+        aiCreditorCount = 0; aiDefermentMonths = 0; aiSogumwonMonthly = 0
+        aiDataReady = false
+        aiRecentDebt = 0; aiMajorCreditor = ""; aiMajorCreditorDebt = 0
+        aiNonAffiliatedDebt = 0; aiHasBusinessHistory = false
+        aiBusinessStartYear = 0; aiBusinessEndYear = 0; aiHasRecoveryPlan = false
+
+        // 파일 텍스트 초기화
+        hwpText = ""; pdfText = ""
+        userPdfPassword = ""
+
+        // companion object 초기화
+        recognizedText4.clear(); recognizedText5.clear()
+
+        // UI 초기화
+        binding.name.text = ""; binding.card.text = ""; binding.dat.text = ""
+        binding.money.text = ""; binding.use.text = ""; binding.test1.text = ""
+        binding.test2.text = ""; binding.half.text = ""; binding.testing.text = ""
+
+        Log.d("DATA_RESET", "모든 데이터 초기화 완료")
     }
 
     private fun showToast(message: String) {
