@@ -17,12 +17,12 @@
             android:layout_height="150dp"
             android:layout_marginBottom="20dp"/>
         <Button
-            android:id="@+id/buttonSelectFile"
+            android:id="@+id/buttonBatchDiagnosis"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="10dp"
-            android:text="파일 선택하기"
-            android:backgroundTint="#4caf50"/>
+            android:text="배치 진단"
+            android:backgroundTint="#ff9800"/>
         <LinearLayout
             android:orientation="vertical"
             android:background="@drawable/actions"

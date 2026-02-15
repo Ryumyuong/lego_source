@@ -1,9 +1,9 @@
-package com.main.lego
+package com.main.legos
 
 import android.content.Intent
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
-import com.main.lego.databinding.ActivityDataBinding
+import com.main.legos.databinding.ActivityDataBinding
 
 class DataActivity : AppCompatActivity() {
     lateinit var binding: ActivityDataBinding

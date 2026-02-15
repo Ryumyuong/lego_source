@@ -1,20 +1,28 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
 
+val localProperties = Properties().apply {
+    val localFile = rootProject.file("local.properties")
+    if (localFile.exists()) load(localFile.inputStream())
+}
+
 android {
-    namespace = "com.main.lego"
+    namespace = "com.main.legos"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.main.lego"
+        applicationId = "com.main.legos"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.1"
+        versionCode = 6
+        versionName = "1.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "GEMINI_API_KEY", "\"${localProperties.getProperty("GEMINI_API_KEY", "")}\"")
     }
 
     buildTypes {
@@ -35,6 +43,7 @@ android {
     }
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
     packaging {
         resources {
@@ -64,6 +73,9 @@ dependencies {
     // ML Kit Text Recognition (Korean)
     implementation("com.google.mlkit:text-recognition-korean:16.0.0")
 
+    // Gson 호환성 (2.11+ 기본 STRICT 모드 문제 방지)
+    implementation("com.google.code.gson:gson:2.10.1")
+
     // Apache POI for Excel
     implementation("org.apache.poi:poi:5.2.5") {
         exclude(group = "org.apache.logging.log4j")
@@ -73,7 +85,7 @@ dependencies {
     }
 
     // HWP file parser
-    implementation("kr.dogfoot:hwplib:1.1.1")
+    implementation("kr.dogfoot:hwplib:1.1.10")
     implementation("androidx.activity:activity:1.12.2")
 
     // PDF text extraction

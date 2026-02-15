@@ -1,11 +1,11 @@
-package com.main.lego
+package com.main.legos
 
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import androidx.appcompat.app.AppCompatActivity
-import com.main.lego.databinding.ActivityIntroBinding
+import com.main.legos.databinding.ActivityIntroBinding
 
 class IntroActivity : AppCompatActivity() {
     private val SPLASH_TIMEOUT: Long = 2000
@@ -20,7 +20,7 @@ class IntroActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         Handler(Looper.getMainLooper()).postDelayed({
-            startActivity(Intent(this, DataActivity::class.java))
+            startActivity(Intent(this, MainActivity::class.java))
             finish()
         }, SPLASH_TIMEOUT)
 
