@@ -1302,7 +1302,7 @@ class MainActivity : AppCompatActivity() {
                         val bizM = Pattern.compile("(\\d{2,4})년\\s*(?:(\\d{1,2})월\\s*)?개업").matcher(job)
                         if (bizM.find()) {
                             val y = bizM.group(1)!!.toInt()
-                            businessStartYear = if (y < 100) 2000 + y else y
+                            businessStartYear = if (y < 30) 2000 + y else if (y < 100) 1900 + y else y
                             val m = bizM.group(2)
                             if (m != null) businessStartMonth = m.toInt()
                         }
@@ -1311,7 +1311,7 @@ class MainActivity : AppCompatActivity() {
                         val bizE = Pattern.compile("(\\d{2,4})년\\s*(?:\\d{1,2}월\\s*)?폐업").matcher(job)
                         if (bizE.find()) {
                             val y = bizE.group(1)!!.toInt()
-                            businessEndYear = if (y < 100) 2000 + y else y
+                            businessEndYear = if (y < 30) 2000 + y else if (y < 100) 1900 + y else y
                         }
                     }
                     Log.d("HWP_PARSE", "재직줄 사업자 감지: $job (개업=$businessStartYear, 폐업=$businessEndYear)")
@@ -1345,7 +1345,7 @@ class MainActivity : AppCompatActivity() {
                         val bizYearMatcher = bizYearPattern.matcher(line)
                         if (bizYearMatcher.find()) {
                             val y = bizYearMatcher.group(1)!!.toInt()
-                            businessStartYear = if (y < 100) 2000 + y else y
+                            businessStartYear = if (y < 30) 2000 + y else if (y < 100) 1900 + y else y
                             val monthStr = bizYearMatcher.group(2)
                             if (monthStr != null && businessStartMonth == 0) {
                                 businessStartMonth = monthStr.toInt()
@@ -1357,7 +1357,7 @@ class MainActivity : AppCompatActivity() {
                         val bizEndMatcher = bizEndPattern.matcher(line)
                         if (bizEndMatcher.find()) {
                             val y = bizEndMatcher.group(1)!!.toInt()
-                            businessEndYear = if (y < 100) 2000 + y else y
+                            businessEndYear = if (y < 30) 2000 + y else if (y < 100) 1900 + y else y
                         }
                         // 폐업 년도가 없으면 0 유지 (현재 운영 중으로 간주)
                     }
@@ -2305,6 +2305,17 @@ class MainActivity : AppCompatActivity() {
                         for (amt in amounts) {
                             val manWon = amt.groupValues[1].replace(",", "").toInt()
                             retirementDamboAmountsChun.getOrPut(creditorName) { mutableListOf() }.add(manWon * 10)
+                        }
+                    }
+                    // 대출과목 카테고리 담보 금액 추출: "기타(차담보) = 3000만" → parsedDamboTotal에 합산
+                    // 실제 채권사가 아닌 카테고리명(기타, 기타대출 등)은 표 매칭 불가 → 직접 금액 추출
+                    val isGenericCategory = creditorName in listOf("기타", "기타대출", "담보", "담보대출")
+                    if (isGenericCategory) {
+                        // 같은 줄에서 금액 추출 (매치 영역 밖 포함)
+                        val lineAmount = extractAmount(line)
+                        if (lineAmount > 0) {
+                            parsedDamboTotal += lineAmount
+                            Log.d("HWP_PARSE", "대출과목 카테고리 담보 금액: $creditorName($damboType) = ${lineAmount}만 → parsedDamboTotal=${parsedDamboTotal}만")
                         }
                     }
                 }
@@ -3383,6 +3394,11 @@ class MainActivity : AppCompatActivity() {
         val hoeBlocked = dischargeWithin5Years || income <= 100  // 회(개인회생) 맨앞 불가: 면책5년이내, 소득100만이하
         val smallDebtNoHoe = targetDebt <= 4000  // 소액채무: 복합진단에서 회 제외 (회워는 유지)
 
+        // 장기 최종 총액 (단기 vs 장기 비교용)
+        val longTermFinalTotal = if (finalYear > 0 && finalMonthly > 0) finalMonthly * finalYear * 12 else longTermTotal
+        // 단기가 장기보다 저렴한지 여부 (1000만 이상 차이)
+        val shortTermCheaperThanLong = shortTermTotal > 0 && longTermFinalTotal > 0 && shortTermTotal + 1000 <= longTermFinalTotal
+
         val diagnosisAfterCarSale = when {
             !canLongTermAfterCarSale -> ""
             delinquentDays >= 90 -> if (hoeBlocked) (if (canDeferment) "워유워" else "워") else "회워"
@@ -3442,7 +3458,7 @@ class MainActivity : AppCompatActivity() {
             diagnosis = "새새"
         } else if (canApplySae && saeTotalPayment > 0) {
             val longTermFinalTotal = finalMonthly * finalYear * 12
-            if (!effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && saeTotalPayment - shortTermTotal > 1000 && targetDebt - shortTermTotal >= 1000) {
+            if (!effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && saeTotalPayment - shortTermTotal > 1000 && (targetDebt - shortTermTotal >= 1000 || shortTermCheaperThanLong)) {
                 diagnosis = "단순유리"
             } else if (!effectiveShortTermBlocked && shortTermTotal > 0 && saeTotalPayment - shortTermTotal <= 1000) {
                 // 새새 - 단기 <= 1000만이면 새새가 유리
@@ -3482,7 +3498,7 @@ class MainActivity : AppCompatActivity() {
         } else if (hasOngoingProcess) {
             diagnosis = when {
                 isBangsaeng -> "방생"
-                !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && targetDebt - shortTermTotal >= 1000 -> "단순유리"
+                !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && (targetDebt - shortTermTotal >= 1000 || shortTermCheaperThanLong) -> "단순유리"
                 !effectiveShortTermBlocked -> "회워"
                 else -> when {
                     delinquentDays >= 90 -> if (hoeBlocked) (if (canDeferment) "워유워" else "워") else "회워"
@@ -3493,7 +3509,7 @@ class MainActivity : AppCompatActivity() {
         } else if (!canDeferment) {
             diagnosis = when {
                 isBangsaeng -> "방생"
-                !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && targetDebt - shortTermTotal >= 1000 -> "단순유리"
+                !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && (targetDebt - shortTermTotal >= 1000 || shortTermCheaperThanLong) -> "단순유리"
                 !effectiveShortTermBlocked -> "회워"
                 else -> when {
                     delinquentDays >= 90 -> if (hoeBlocked) "워" else "회워"
@@ -3505,7 +3521,7 @@ class MainActivity : AppCompatActivity() {
             diagnosis = when {
                 isBangsaeng -> "방생"
                 hasWorkoutExpired && !longTermDebtOverLimit -> "단순워크"
-                !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && targetDebt - shortTermTotal >= 1000 -> "단순유리"
+                !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && (targetDebt - shortTermTotal >= 1000 || shortTermCheaperThanLong) -> "단순유리"
                 !effectiveShortTermBlocked && !longTermPropertyExcess -> "회워"
                 hoeBlocked -> "워유워"
                 else -> "회워"
@@ -3513,7 +3529,7 @@ class MainActivity : AppCompatActivity() {
         } else if (delinquentDays >= 30) {
             diagnosis = when {
                 isBangsaeng -> "방생"
-                !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && targetDebt - shortTermTotal >= 1000 -> "단순유리"
+                !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && (targetDebt - shortTermTotal >= 1000 || shortTermCheaperThanLong) -> "단순유리"
                 recentDebtRatio >= 30 && !effectiveShortTermBlocked && !smallDebtNoHoe -> "프회워"
                 (targetDebt <= 4000 || smallDebtNoHoe) && !effectiveShortTermBlocked -> "프유워"
                 !effectiveShortTermBlocked && !smallDebtNoHoe -> "프회워"
@@ -3523,7 +3539,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             diagnosis = when {
                 isBangsaeng -> "방생"
-                !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && targetDebt - shortTermTotal >= 1000 -> "단순유리"
+                !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && (targetDebt - shortTermTotal >= 1000 || shortTermCheaperThanLong) -> "단순유리"
                 recentDebtRatio >= 30 && !effectiveShortTermBlocked && !smallDebtNoHoe -> "신회워"
                 (targetDebt <= 4000 || smallDebtNoHoe) && !effectiveShortTermBlocked -> "신유워"
                 !effectiveShortTermBlocked && !smallDebtNoHoe -> "신회워"
@@ -3648,7 +3664,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     val immediatePrefix = if (effectiveShortTermBlocked && !longTermFullyBlocked && finalYear > 0 && !hoeBlocked) {
                         "회워 바로 가능, "
-                    } else if (!effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && targetDebt - shortTermTotal >= 1000 && !diagnosis.startsWith("단순")) {
+                    } else if (!effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && (targetDebt - shortTermTotal >= 1000 || shortTermCheaperThanLong) && !diagnosis.startsWith("단순")) {
                         "단순 바로 가능, "
                     } else if (!effectiveShortTermBlocked) {
                         "회워 바로 가능, "
@@ -4419,6 +4435,7 @@ class MainActivity : AppCompatActivity() {
             override fun onSuccess(result: AiDataExtractor.ExtractResult) {
                 if (aiExtractCancelled) return
                 // 채권사/세금 관련 제거됨 - 코드에서 직접 파싱
+                aiDefermentMonths = result.defermentMonths
                 aiSogumwonMonthly = result.sogumwonMonthly
                 aiHasRecoveryPlan = result.hasRecoveryPlan
 
