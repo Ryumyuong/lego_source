@@ -135,8 +135,9 @@ object AffiliateList {
         if (normName.contains("신복") || normKorean.contains("신복")) return true
         if (normName.contains("캠코") || normKorean.contains("캠코")) return true
         if (normName.contains("신협") || normKorean.contains("신협")) return true
-        if (normName.contains("농협") || normKorean.contains("농협")) return true
+        if (normName.contains("농협") || normKorean.contains("농협") || normName.contains("농업협동조합") || normKorean.contains("농업협동조합")) return true
         if (normName.contains("수협") || normKorean.contains("수협")) return true
+        if (normName.contains("대구은행") || normKorean.contains("대구은행")) return true
         if (normName.contains("상호") || normKorean.contains("상호")) return true
 
         // 1. 정확히 일치하는지 확인
