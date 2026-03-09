@@ -63,45 +63,25 @@ class MainActivity : AppCompatActivity() {
     private var baby = "0"
     private var korea = "X"
 
-    private var aiIncome = 0
-    private var aiTargetDebt = 0
-    private var aiProperty = 0
-    private var aiCreditorCount = 0
     private var aiDefermentMonths = 0
-    private var aiSogumwonMonthly = 0
 
-    // AI 데이터 추출
-    private var aiDataReady = false
-    private var loadingDialog: android.app.ProgressDialog? = null
-
-    private var aiMajorCreditor = ""       // 과반 채권사명
-    private var aiMajorCreditorDebt = 0    // 과반 채권사 채무
-    private var aiNonAffiliatedDebt = 0    // 미협약 채무
-    private var aiNonAffiliatedNames = mutableListOf<String>()  // 미협약 채권사명
-    private var aiNonAffiliatedEntries = mutableListOf<Pair<String, Int>>()  // 미협약 채권사별 (이름, 금액)
-    private var aiCreditorNames = mutableListOf<String>()  // 전체 AI 채권사명
-    private data class CreditorInfo(val name: String, val amount: Int, val isCard: Boolean)
-    private var aiCreditorList = mutableListOf<CreditorInfo>()  // 전체 AI 채권사 (이름, 금액, 카드여부)
-    private var aiHasBusinessHistory = false // 사업자 이력
-    private var aiBusinessStartYear = 0    // 개업 년도
-    private var aiBusinessStartMonth = 0   // 개업 월
-    private var aiBusinessEndYear = 0      // 폐업 년도
     private var aiHasRecoveryPlan = false    // 변제계획안 존재 (개인회생 진행 중)
-    private var aiOthersProperty = 0           // 타인명의 부동산 재산
     private var pdfAgreementDebt = 0           // 합의서 PDF 대상채무 (만원)
     private var pdfAgreementProcess = ""       // 합의서 PDF 진행중 제도 (신속/프리/워크)
+    private val pdfAgreementCreditors = mutableMapOf<String, Int>()  // 합의서 PDF 채권사 (이름→원금만원)
     private var pdfApplicationDate = ""        // 상환내역서 PDF 신청일자 (YYYY.MM.DD)
     private var hasPdfFile = false             // PDF 파일 존재 여부
-    private var aiDamboDebt = 0              // 대상채무 제외된 담보대출 합계 (차담보/전세 제외)
-    private var aiTaxDebt = 0                // 국세/지방세/세금 채무 (단기에만 포함)
-    private var aiCardUsageTotal = 0         // AI 카드이용금액 합계 (만원)
     private var pdfExcludedGuaranteeDebt = 0  // 합의서 제외 보증서담보대출 채무 (만원)
     private var pdfExcludedOtherDebt = 0      // 합의서 제외 기타 채무 (만원)
-    private var aiExtractCancelled = false    // AI 추출 중단 여부
+    private var pdfExcludedDamboCreditors = mutableSetOf<String>()  // 제외된 담보 채권사명 (290 판단용)
+    private var pdfRecoveryDebt = 0            // 변제계획안 대상채무 (만원)
+    private var pdfRecoveryIncome = 0          // 변제계획안 월변제금 (만원)
+    private var pdfRecoveryMonths = 0          // 변제계획안 변제기간 (개월)
 
     // 여러 파일 처리
     private var hwpText = ""
     private var pdfText = ""
+    private var isClientMode = false  // 거래처 진단 모드
 
 
     // 배치 진단
@@ -147,7 +127,18 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        binding.buttonBatchDiagnosis.setOnClickListener {
+        binding.buttonClientDiagnosis.setOnClickListener {
+            isClientMode = true
+            resetAllData()
+            batchMode = false
+            batchUriList.clear()
+            batchGroups.clear()
+            batchResults.clear()
+            batchIndex = 0
+            openBatchFilePicker()
+        }
+        binding.buttonLegoDiagnosis.setOnClickListener {
+            isClientMode = false
             resetAllData()
             batchMode = false
             batchUriList.clear()
@@ -186,7 +177,8 @@ class MainActivity : AppCompatActivity() {
                             putExtra(Intent.EXTRA_MIME_TYPES, arrayOf(
                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                 "application/x-hwp", "application/haansofthwp", "application/vnd.hancom.hwp",
-                                "application/pdf"
+                                "application/pdf",
+                                "image/jpeg", "image/png", "image/bmp", "image/webp"
                             ))
                         }
                         startActivityForResult(Intent.createChooser(intent, "파일 선택"), READ_REQUEST_CODE)
@@ -202,10 +194,10 @@ class MainActivity : AppCompatActivity() {
                 }
             } ?: resultData.data?.let { batchUriList.add(it) }
 
-            // HWP/PDF 아닌 파일 제거
+            // HWP/PDF/이미지 아닌 파일 제거
             batchUriList = ArrayList(batchUriList.filter { uri ->
                 val name = getFileName(uri)?.lowercase() ?: ""
-                name.endsWith(".hwp") || name.endsWith(".pdf")
+                name.endsWith(".hwp") || name.endsWith(".pdf") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png") || name.endsWith(".bmp") || name.endsWith(".webp")
             })
 
             // 현재 누적 현황 보여주며 추가/시작 선택
@@ -223,7 +215,6 @@ class MainActivity : AppCompatActivity() {
     private fun processMultipleFiles(uriList: ArrayList<Uri>) {
         hwpText = ""
         pdfText = ""
-        val pdfTexts = ArrayList<String>()
         val pdfUris = ArrayList<Pair<Uri, String>>()
         showToast("${uriList.size}개 파일 처리 중...")
 
@@ -240,6 +231,11 @@ class MainActivity : AppCompatActivity() {
                     pdfUris.add(Pair(uri, fileName))
                     hasPdfFile = true
                 }
+                lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg") || lowerName.endsWith(".png") || lowerName.endsWith(".bmp") || lowerName.endsWith(".webp") -> {
+                    pdfUris.add(Pair(uri, fileName))
+                    hasPdfFile = true
+                    Log.d("FILE_PROCESS", "이미지 파일 처리: $fileName")
+                }
                 lowerName.endsWith(".xlsx") -> {
                     readExcelFile(uri)
                     return
@@ -247,94 +243,243 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 2단계: PDF 처리
-        // 변제계획안/소금원 PDF만 AI 통합 텍스트에 포함, 상환내역서 등 기타 PDF는 이미지 OCR로 유예기간 추출
-        val ocrPdfUris = ArrayList<Pair<Uri, String>>() // 이미지 OCR 대상 PDF
+        // 2단계: PDF 처리 (합의서/변제계획안=텍스트파싱, 상환내역서=이미지OCR, 기타=ML Kit OCR)
+        val ocrPdfUris = ArrayList<Pair<Uri, String>>()
         for ((uri, fileName) in pdfUris) {
             val lowerFileName = fileName.lowercase()
-            val isRelevantPdf = lowerFileName.contains("변제계획") || lowerFileName.contains("소금원") ||
-                    lowerFileName.contains("소득금액") || lowerFileName.contains("변제예정")
-            if (isRelevantPdf) {
-                val text = extractPdfText(uri)
-                if (text.isNotEmpty()) {
-                    pdfTexts.add("=== PDF: $fileName ===\n$text")
-                    Log.d("FILE_PROCESS", "PDF 파일 처리 (AI포함): $fileName (${text.length}자)")
+            when {
+                lowerFileName.contains("합의") -> {
+                    // 합의서는 항상 Gemini Vision으로 처리 (테이블 추출이 필요)
+                    Log.d("FILE_PROCESS", "합의서 → Gemini Vision 처리 ($fileName)")
+                    ocrPdfUris.add(Pair(uri, fileName))
                 }
-            } else {
-                // 상환내역서 등: 이미지 OCR로 유예기간 추출
-                ocrPdfUris.add(Pair(uri, fileName))
+                lowerFileName.contains("변제계획") || lowerFileName.contains("변제예정") -> {
+                    val text = extractPdfText(uri)
+                    if (text.length > 50) parseRecoveryPlanPdfText(text, fileName)
+                    else ocrPdfUris.add(Pair(uri, fileName))  // 이미지 PDF → OCR
+                }
+                else -> ocrPdfUris.add(Pair(uri, fileName))
             }
         }
 
         if (ocrPdfUris.isNotEmpty()) {
-            // OCR 완료 후 나머지 처리 진행
             extractDataFromPdfImages(ocrPdfUris) { ocrResult ->
                 if (ocrResult.defermentMonths > 0) {
                     hwpText += "\n유예기간 ${ocrResult.defermentMonths}개월"
                     Log.d("FILE_PROCESS", "PDF OCR 유예기간 추출: ${ocrResult.defermentMonths}개월")
                 }
-                if (ocrResult.agreementDebt > 0) {
-                    pdfAgreementDebt = ocrResult.agreementDebt
-                    Log.d("FILE_PROCESS", "PDF OCR 합의서 대상채무 추출: ${ocrResult.agreementDebt}만")
-                }
-                if (ocrResult.processName.isNotEmpty()) {
-                    pdfAgreementProcess = ocrResult.processName
-                    Log.d("FILE_PROCESS", "PDF OCR 진행중 제도: ${ocrResult.processName}")
-                }
                 if (ocrResult.applicationDate.isNotEmpty()) {
                     pdfApplicationDate = ocrResult.applicationDate
                     Log.d("FILE_PROCESS", "PDF OCR 신청일자 추출: ${ocrResult.applicationDate}")
                 }
-                if (ocrResult.excludedGuaranteeDebt > 0) {
-                    pdfExcludedGuaranteeDebt = ocrResult.excludedGuaranteeDebt
-                    Log.d("FILE_PROCESS", "PDF 합의서 제외 보증서담보대출: ${ocrResult.excludedGuaranteeDebt}만")
-                }
-                if (ocrResult.excludedOtherDebt > 0) {
-                    pdfExcludedOtherDebt = ocrResult.excludedOtherDebt
-                    Log.d("FILE_PROCESS", "PDF 합의서 제외 기타: ${ocrResult.excludedOtherDebt}만")
-                }
-                finishFileProcessing(pdfTexts)
+                finishFileProcessing()
             }
         } else {
-            finishFileProcessing(pdfTexts)
+            finishFileProcessing()
         }
     }
 
-    private fun finishFileProcessing(pdfTexts: ArrayList<String>) {
-        pdfText = pdfTexts.joinToString("\n\n")
-
-        val combinedText = buildString {
-            if (hwpText.isNotEmpty()) append("=== HWP 파일 내용 ===\n$hwpText\n\n")
-            if (pdfText.isNotEmpty()) append("=== PDF 파일 내용 ===\n$pdfText\n\n")
-        }
-
-        if (combinedText.isNotEmpty()) {
-            Log.d("FILE_PROCESS", "통합 텍스트 길이: ${combinedText.length}")
-            extractDataWithAI(combinedText)
-        } else if (hwpText.isNotEmpty()) {
+    private fun finishFileProcessing() {
+        if (hwpText.isNotEmpty()) {
             parseHwpData(hwpText)
-            showToast("파일 처리 완료 (AI 없이)")
+            if (batchMode) {
+                val groupName = batchGroups[batchIndex].baseName
+                val pdfInfo = if (batchGroups[batchIndex].pdfUris.isNotEmpty()) " (+PDF)" else ""
+                batchResults.add("===== ${batchIndex + 1}/${batchGroups.size} =====\n[파일] $groupName$pdfInfo\n${buildResultText()}")
+                batchIndex++
+                batchDialog?.setMessage("${batchIndex}/${batchGroups.size} 처리 완료")
+                processNextBatchFile()
+            } else {
+                showToast("파일 처리 완료")
+            }
         } else {
             showToast("처리할 파일이 없습니다")
         }
     }
 
-    data class PdfOcrResult(val defermentMonths: Int, val agreementDebt: Int, val processName: String, val applicationDate: String = "", val excludedGuaranteeDebt: Int = 0, val excludedOtherDebt: Int = 0)
+    private fun parseAgreementPdfText(text: String, fileName: String) {
+        val noSpace = text.replace(Regex("\\s"), "")
+
+        // [1] 제도 타입 - Gemini가 못 잡았을 때만 OCR로 보완
+        if (pdfAgreementProcess.isEmpty()) {
+            pdfAgreementProcess = when {
+                noSpace.contains("신속채무조정") -> "신"
+                noSpace.contains("사전채무조정") -> "프"
+                noSpace.contains("개인채무조정") && noSpace.contains("확정") -> "워"
+                else -> ""
+            }
+        }
+
+        // [2] 유예기간 (OCR 텍스트에서)
+        val deferMatch = Regex("(?:유예기간|거치기간)\\D{0,10}(\\d+)\\s*개?월").find(text)
+        if (deferMatch != null) {
+            val months = deferMatch.groupValues[1].toInt()
+            if (months > aiDefermentMonths) aiDefermentMonths = months
+        }
+
+        // [3] 대상채무, 제외채무 → Gemini가 처리 (pdfAgreementDebt, pdfExcludedOtherDebt 이미 설정됨)
+
+        Log.d("PDF_PARSE", "합의서 파싱 결과: 제도=$pdfAgreementProcess, 채무=${pdfAgreementDebt}만, " +
+            "유예=${aiDefermentMonths}개월, 제외보증=${pdfExcludedGuaranteeDebt}만, 제외기타=${pdfExcludedOtherDebt}만 ($fileName)")
+    }
+
+    private fun parseRecoveryPlanPdfText(text: String, fileName: String) {
+        aiHasRecoveryPlan = true
+
+        val lines = text.split("\n")
+
+        // [1] 대상채무: "합계" 또는 "총계" 행에서 가장 큰 금액
+        for (line in lines) {
+            val lineNoSpace = line.replace(Regex("\\s"), "")
+            if (lineNoSpace.contains("합계") || lineNoSpace.contains("총계")) {
+                val amounts = Regex("[\\d,]{5,}").findAll(line)
+                    .map { it.value.replace(",", "").toLongOrNull() ?: 0L }
+                    .filter { it > 0 }.toList()
+                val maxAmount = amounts.maxOrNull() ?: 0L
+                if (maxAmount > 10000 && pdfRecoveryDebt == 0) {
+                    pdfRecoveryDebt = (maxAmount / 10000).toInt()
+                }
+            }
+        }
+
+        // [2] 월 변제금: "월 실제 가용소득(⑤)" 우선, 없으면 "가용소득" 섹션에서 추출
+        val textNoSpace = text.replace(Regex("\\s"), "")
+        val actualIncomeMatch = Regex("월실제가용소득[^\\d]{0,20}([\\d,]{5,})").find(textNoSpace)
+        if (actualIncomeMatch != null) {
+            val amount = actualIncomeMatch.groupValues[1].replace(",", "").toLongOrNull() ?: 0L
+            if (amount in 100000..50000000) {
+                pdfRecoveryIncome = (amount / 10000).toInt()
+            }
+        } else {
+            val incomeIdx = text.indexOf("가용소득").takeIf { it >= 0 }
+            if (incomeIdx != null) {
+                val incomeArea = text.substring(incomeIdx, minOf(incomeIdx + 500, text.length))
+                val amounts = Regex("[\\d,]{5,}").findAll(incomeArea)
+                    .map { it.value.replace(",", "").toLongOrNull() ?: 0L }
+                    .filter { it in 100000..50000000 }.toList()
+                if (amounts.size >= 3) {
+                    pdfRecoveryIncome = (amounts[2] / 10000).toInt()
+                } else if (amounts.isNotEmpty()) {
+                    pdfRecoveryIncome = (amounts.last() / 10000).toInt()
+                }
+            }
+        }
+
+        // [3] 변제기간: "XX개월간" 또는 변제횟수
+        val monthsMatch = Regex("(\\d+)\\s*개월간").find(text)
+            ?: Regex("변제횟수[^\\d]{0,10}(\\d+)").find(textNoSpace)
+        if (monthsMatch != null) {
+            pdfRecoveryMonths = monthsMatch.groupValues[1].toInt()
+        }
+
+        Log.d("PDF_PARSE", "변제계획안 텍스트 파싱: 대상채무=${pdfRecoveryDebt}만, 월변제금=${pdfRecoveryIncome}만, 변제기간=${pdfRecoveryMonths}개월 ($fileName)")
+    }
+
+    data class PdfOcrResult(val defermentMonths: Int, val applicationDate: String = "")
 
     private fun extractDataFromPdfImages(
         pdfUris: List<Pair<Uri, String>>,
         onComplete: (PdfOcrResult) -> Unit
     ) {
         var maxDefermentMonths = 0
-        var agreementDebt = 0
-        var detectedProcess = ""
         var detectedApplicationDate = ""
-        var excludedGuaranteeDebt = 0
-        var excludedOtherDebt = 0
         var remaining = pdfUris.size
 
         for ((uri, fileName) in pdfUris) {
             try {
+                val lowerFileName = fileName.lowercase()
+                val isImageFile = lowerFileName.endsWith(".jpg") || lowerFileName.endsWith(".jpeg") || lowerFileName.endsWith(".png") || lowerFileName.endsWith(".bmp") || lowerFileName.endsWith(".webp")
+
+                // ===== 이미지 파일: BitmapFactory로 직접 로드 =====
+                if (isImageFile) {
+                    val imageBitmap = contentResolver.openInputStream(uri)?.use { input ->
+                        android.graphics.BitmapFactory.decodeStream(input)
+                    }
+                    if (imageBitmap == null) {
+                        Log.e("FILE_PROCESS", "이미지 디코딩 실패: $fileName")
+                        remaining--
+                        if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, detectedApplicationDate))
+                        continue
+                    }
+                    Log.d("FILE_PROCESS", "이미지 파일 로드: $fileName (${imageBitmap.width}x${imageBitmap.height})")
+
+                    val isRepayment = lowerFileName.contains("상환")
+                    val isAgreementImg = lowerFileName.contains("합의")
+                    val isRecoveryPlanImg = lowerFileName.contains("변제계획") || lowerFileName.contains("변제예정")
+
+                    if (isAgreementImg) {
+                        Thread {
+                            try {
+                                callGeminiVisionForAgreement(arrayListOf(imageBitmap), fileName)
+                            } catch (e: Exception) {
+                                Log.e("FILE_PROCESS", "합의서 Gemini AI 실패 ($fileName): ${e.message}")
+                            }
+                            runOnUiThread {
+                                remaining--
+                                if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, detectedApplicationDate))
+                            }
+                        }.start()
+                    } else if (isRepayment) {
+                        Thread {
+                            try {
+                                val result = callGeminiVisionForRepayment(imageBitmap, fileName)
+                                if (result.first.isNotEmpty()) detectedApplicationDate = result.first
+                                if (result.second > 0 && result.second > maxDefermentMonths) maxDefermentMonths = result.second
+                            } catch (e: Exception) {
+                                Log.e("FILE_PROCESS", "상환내역서 Gemini AI 실패 ($fileName): ${e.message}")
+                            }
+                            runOnUiThread {
+                                remaining--
+                                if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, detectedApplicationDate))
+                            }
+                        }.start()
+                    } else if (isRecoveryPlanImg) {
+                        Thread {
+                            try {
+                                callGeminiVisionForRecoveryPlan(arrayListOf(imageBitmap), fileName)
+                            } catch (e: Exception) {
+                                Log.e("FILE_PROCESS", "변제계획안 Gemini AI 실패 ($fileName): ${e.message}")
+                            }
+                            runOnUiThread {
+                                remaining--
+                                if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, detectedApplicationDate))
+                            }
+                        }.start()
+                    } else {
+                        val image = InputImage.fromBitmap(imageBitmap, 0)
+                        val client = TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
+                        client.process(image)
+                            .addOnSuccessListener { visionText ->
+                                val ocrText = visionText.text
+                                Log.d("FILE_PROCESS", "이미지 OCR ($fileName): ${ocrText.take(500)}")
+                                val ocrNoSpace = ocrText.replace(" ", "")
+                                if (ocrNoSpace.contains("유예기간") || ocrNoSpace.contains("거치기간")) {
+                                    val monthMatch = Regex("(?:유예기간|거치기간)\\s*(\\d+)\\s*개?월").find(ocrText)
+                                        ?: Regex("(?:유예기간|거치기간)[^\\d]{0,10}(\\d+)\\s*개?월").find(ocrText)
+                                    if (monthMatch != null) {
+                                        val months = monthMatch.groupValues[1].toInt()
+                                        if (months > maxDefermentMonths) maxDefermentMonths = months
+                                    }
+                                }
+                                if (ocrNoSpace.contains("신청일자") && detectedApplicationDate.isEmpty()) {
+                                    val appDateMatch = Regex("신청일자\\s*(\\d{4})[.\\-/](\\d{1,2})[.\\-/](\\d{1,2})").find(ocrText)
+                                    if (appDateMatch != null) {
+                                        detectedApplicationDate = "${appDateMatch.groupValues[1]}.${appDateMatch.groupValues[2].padStart(2, '0')}.${appDateMatch.groupValues[3].padStart(2, '0')}"
+                                    }
+                                }
+                                remaining--
+                                if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, detectedApplicationDate))
+                            }
+                            .addOnFailureListener { e ->
+                                Log.e("FILE_PROCESS", "이미지 OCR 실패 ($fileName): ${e.message}")
+                                remaining--
+                                if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, detectedApplicationDate))
+                            }
+                    }
+                    continue  // 다음 파일로
+                }
+
+                // ===== PDF 파일 처리 =====
                 val tempFile = File.createTempFile("pdf_", ".pdf", cacheDir)
                 contentResolver.openInputStream(uri)?.use { input ->
                     FileOutputStream(tempFile).use { output -> input.copyTo(output) }
@@ -344,109 +489,136 @@ class MainActivity : AppCompatActivity() {
 
                 val pageCount = renderer.pageCount
                 if (pageCount > 0) {
-                    val isAgreement = fileName.lowercase().contains("합의")
+                    val isRepayment = fileName.lowercase().contains("상환")
+                    val isAgreementPdf = fileName.lowercase().contains("합의")
+                    val isRecoveryPlanPdf = fileName.lowercase().let { it.contains("변제계획") || it.contains("변제예정") }
 
-                    if (isAgreement) {
-                        // ===== 합의서: Gemini AI 비전으로 처리 =====
-                        val bitmaps = mutableListOf<Bitmap>()
-                        for (pageIdx in 0 until pageCount) {
-                            val page = renderer.openPage(pageIdx)
-                            val bitmap = Bitmap.createBitmap(page.width * 2, page.height * 2, Bitmap.Config.ARGB_8888)
-                            bitmap.eraseColor(android.graphics.Color.WHITE)
-                            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                            page.close()
-                            bitmaps.add(bitmap)
-                            Log.d("FILE_PROCESS", "합의서 PDF→이미지: $fileName p${pageIdx + 1}/${pageCount} (${bitmap.width}x${bitmap.height})")
+                    // ===== 합의서 이미지 PDF: Gemini AI로 테이블 추출 =====
+                    if (isAgreementPdf) {
+                        // 전체 페이지 렌더링 (최대 10페이지, OOM 방지)
+                        val neededPages = (0 until minOf(pageCount, 10)).toMutableList()
+                        val geminiPages = ArrayList<Bitmap>()
+                        for (i in neededPages) {
+                            val p = renderer.openPage(i)
+                            val bmp = Bitmap.createBitmap(p.width * 2, p.height * 2, Bitmap.Config.ARGB_8888)
+                            bmp.eraseColor(android.graphics.Color.WHITE)
+                            p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                            p.close()
+                            geminiPages.add(bmp)
                         }
-                        renderer.close()
-                        fd.close()
-                        tempFile.delete()
+                        renderer.close(); fd.close(); tempFile.delete()
+                        Log.d("FILE_PROCESS", "합의서 PDF→이미지 변환: $fileName ${neededPages.size}/${pageCount}페이지")
 
-                        // Gemini AI 비전 호출 (백그라운드 스레드)
                         Thread {
                             try {
-                                val result = callGeminiVisionForAgreement(bitmaps, fileName)
-                                if (result.debt > 0) agreementDebt = result.debt
-                                if (result.process.isNotEmpty()) detectedProcess = result.process
-                                if (result.deferment > 0 && result.deferment > maxDefermentMonths) maxDefermentMonths = result.deferment
-                                if (result.excludedGuarantee > 0) excludedGuaranteeDebt = result.excludedGuarantee
-                                if (result.excludedOther > 0) excludedOtherDebt = result.excludedOther
+                                callGeminiVisionForAgreement(geminiPages, fileName)
                             } catch (e: Exception) {
                                 Log.e("FILE_PROCESS", "합의서 Gemini AI 실패 ($fileName): ${e.message}")
                             }
+                            // Gemini 완료 후 remaining 감소 (UI 스레드에서)
+                            runOnUiThread {
+                                Log.d("FILE_PROCESS", "합의서 Gemini 완료 → remaining 감소 ($fileName)")
+                                remaining--
+                                if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, detectedApplicationDate))
+                            }
+                        }.start()
+                        continue  // 다음 PDF로
+                    }
+
+                    // ===== 변제계획안 이미지 PDF: Gemini AI로 대상채무/가용소득 추출 =====
+                    if (isRecoveryPlanPdf) {
+                        val neededPages = (0 until minOf(pageCount, 10)).toMutableList()
+                        val geminiPages = ArrayList<Bitmap>()
+                        for (i in neededPages) {
+                            val p = renderer.openPage(i)
+                            val bmp = Bitmap.createBitmap(p.width * 2, p.height * 2, Bitmap.Config.ARGB_8888)
+                            bmp.eraseColor(android.graphics.Color.WHITE)
+                            p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                            p.close()
+                            geminiPages.add(bmp)
+                        }
+                        renderer.close(); fd.close(); tempFile.delete()
+                        Log.d("FILE_PROCESS", "변제계획안 PDF→이미지 변환: $fileName ${neededPages.size}/${pageCount}페이지")
+
+                        Thread {
+                            try {
+                                callGeminiVisionForRecoveryPlan(geminiPages, fileName)
+                            } catch (e: Exception) {
+                                Log.e("FILE_PROCESS", "변제계획안 Gemini AI 실패 ($fileName): ${e.message}")
+                            }
+                            runOnUiThread {
+                                Log.d("FILE_PROCESS", "변제계획안 Gemini 완료 → remaining 감소 ($fileName)")
+                                remaining--
+                                if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, detectedApplicationDate))
+                            }
+                        }.start()
+                        continue  // 다음 PDF로
+                    }
+
+                    val page = renderer.openPage(0)
+                    val bitmap = Bitmap.createBitmap(page.width * 2, page.height * 2, Bitmap.Config.ARGB_8888)
+                    bitmap.eraseColor(android.graphics.Color.WHITE)
+                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    page.close()
+                    renderer.close()
+                    fd.close()
+                    tempFile.delete()
+
+                    Log.d("FILE_PROCESS", "PDF→이미지 변환: $fileName p1/${pageCount} (${bitmap.width}x${bitmap.height})")
+
+                    if (isRepayment) {
+                        // ===== 상환내역서: Gemini Vision으로 신청일자 + 유예기간 추출 =====
+                        Thread {
+                            try {
+                                val result = callGeminiVisionForRepayment(bitmap, fileName)
+                                if (result.first.isNotEmpty()) detectedApplicationDate = result.first
+                                if (result.second > 0 && result.second > maxDefermentMonths) maxDefermentMonths = result.second
+                            } catch (e: Exception) {
+                                Log.e("FILE_PROCESS", "상환내역서 Gemini AI 실패 ($fileName): ${e.message}")
+                            }
                             runOnUiThread {
                                 remaining--
-                                if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, agreementDebt, detectedProcess, detectedApplicationDate, excludedGuaranteeDebt, excludedOtherDebt))
+                                if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, detectedApplicationDate))
                             }
                         }.start()
                     } else {
-                        // ===== 비합의서: 상환내역서는 Gemini Vision, 기타는 ML Kit OCR =====
-                        val isRepayment = fileName.lowercase().contains("상환")
-                        val page = renderer.openPage(0)
-                        val bitmap = Bitmap.createBitmap(page.width * 2, page.height * 2, Bitmap.Config.ARGB_8888)
-                        bitmap.eraseColor(android.graphics.Color.WHITE)
-                        page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                        page.close()
-                        renderer.close()
-                        fd.close()
-                        tempFile.delete()
+                        // ===== 기타 PDF: ML Kit OCR로 유예기간 추출 =====
+                        val image = InputImage.fromBitmap(bitmap, 0)
+                        val client = TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
+                        client.process(image)
+                            .addOnSuccessListener { visionText ->
+                                val ocrText = visionText.text
+                                Log.d("FILE_PROCESS", "PDF OCR p1 ($fileName): ${ocrText.take(500)}")
+                                val ocrNoSpace = ocrText.replace(" ", "")
 
-                        Log.d("FILE_PROCESS", "PDF→이미지 변환: $fileName p1/${pageCount} (${bitmap.width}x${bitmap.height})")
-
-                        if (isRepayment) {
-                            // ===== 상환내역서: Gemini Vision으로 신청일자 + 유예기간 추출 =====
-                            Thread {
-                                try {
-                                    val result = callGeminiVisionForRepayment(bitmap, fileName)
-                                    if (result.first.isNotEmpty()) detectedApplicationDate = result.first
-                                    if (result.second > 0 && result.second > maxDefermentMonths) maxDefermentMonths = result.second
-                                } catch (e: Exception) {
-                                    Log.e("FILE_PROCESS", "상환내역서 Gemini AI 실패 ($fileName): ${e.message}")
-                                }
-                                runOnUiThread {
-                                    remaining--
-                                    if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, agreementDebt, detectedProcess, detectedApplicationDate, excludedGuaranteeDebt, excludedOtherDebt))
-                                }
-                            }.start()
-                        } else {
-                            // ===== 기타 PDF: ML Kit OCR로 유예기간 추출 =====
-                            val image = InputImage.fromBitmap(bitmap, 0)
-                            val client = TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
-                            client.process(image)
-                                .addOnSuccessListener { visionText ->
-                                    val ocrText = visionText.text
-                                    Log.d("FILE_PROCESS", "PDF OCR p1 ($fileName): ${ocrText.take(500)}")
-                                    val ocrNoSpace = ocrText.replace(" ", "")
-
-                                    // 유예기간 추출
-                                    if (ocrNoSpace.contains("유예기간") || ocrNoSpace.contains("거치기간")) {
-                                        val monthMatch = Regex("(?:유예기간|거치기간)\\s*(\\d+)\\s*개?월").find(ocrText)
-                                            ?: Regex("(?:유예기간|거치기간)[^\\d]{0,10}(\\d+)\\s*개?월").find(ocrText)
-                                        if (monthMatch != null) {
-                                            val months = monthMatch.groupValues[1].toInt()
-                                            if (months > maxDefermentMonths) maxDefermentMonths = months
-                                            Log.d("FILE_PROCESS", "PDF OCR 유예기간 감지: ${months}개월 ($fileName)")
-                                        }
+                                // 유예기간 추출
+                                if (ocrNoSpace.contains("유예기간") || ocrNoSpace.contains("거치기간")) {
+                                    val monthMatch = Regex("(?:유예기간|거치기간)\\s*(\\d+)\\s*개?월").find(ocrText)
+                                        ?: Regex("(?:유예기간|거치기간)[^\\d]{0,10}(\\d+)\\s*개?월").find(ocrText)
+                                    if (monthMatch != null) {
+                                        val months = monthMatch.groupValues[1].toInt()
+                                        if (months > maxDefermentMonths) maxDefermentMonths = months
+                                        Log.d("FILE_PROCESS", "PDF OCR 유예기간 감지: ${months}개월 ($fileName)")
                                     }
+                                }
 
-                                    // 신청일자 추출
-                                    if (ocrNoSpace.contains("신청일자") && detectedApplicationDate.isEmpty()) {
-                                        val appDateMatch = Regex("신청일자\\s*(\\d{4})[.\\-/](\\d{1,2})[.\\-/](\\d{1,2})").find(ocrText)
-                                        if (appDateMatch != null) {
-                                            detectedApplicationDate = "${appDateMatch.groupValues[1]}.${appDateMatch.groupValues[2].padStart(2, '0')}.${appDateMatch.groupValues[3].padStart(2, '0')}"
-                                            Log.d("FILE_PROCESS", "PDF OCR 신청일자 감지: $detectedApplicationDate ($fileName)")
-                                        }
+                                // 신청일자 추출
+                                if (ocrNoSpace.contains("신청일자") && detectedApplicationDate.isEmpty()) {
+                                    val appDateMatch = Regex("신청일자\\s*(\\d{4})[.\\-/](\\d{1,2})[.\\-/](\\d{1,2})").find(ocrText)
+                                    if (appDateMatch != null) {
+                                        detectedApplicationDate = "${appDateMatch.groupValues[1]}.${appDateMatch.groupValues[2].padStart(2, '0')}.${appDateMatch.groupValues[3].padStart(2, '0')}"
+                                        Log.d("FILE_PROCESS", "PDF OCR 신청일자 감지: $detectedApplicationDate ($fileName)")
                                     }
+                                }
 
-                                    remaining--
-                                    if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, agreementDebt, detectedProcess, detectedApplicationDate))
-                                }
-                                .addOnFailureListener { e ->
-                                    Log.e("FILE_PROCESS", "PDF OCR 실패 ($fileName): ${e.message}")
-                                    remaining--
-                                    if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, agreementDebt, detectedProcess, detectedApplicationDate))
-                                }
-                        }
+                                remaining--
+                                if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, detectedApplicationDate))
+                            }
+                            .addOnFailureListener { e ->
+                                Log.e("FILE_PROCESS", "PDF OCR 실패 ($fileName): ${e.message}")
+                                remaining--
+                                if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, detectedApplicationDate))
+                            }
                     }
                 } else {
                     Log.d("FILE_PROCESS", "PDF 페이지 없음: $fileName")
@@ -454,147 +626,16 @@ class MainActivity : AppCompatActivity() {
                     fd.close()
                     tempFile.delete()
                     remaining--
-                    if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, agreementDebt, detectedProcess, detectedApplicationDate))
+                    if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, detectedApplicationDate))
                 }
             } catch (e: Exception) {
                 Log.e("FILE_PROCESS", "PDF 이미지 변환 실패 ($fileName): ${e.message}")
                 remaining--
-                if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, agreementDebt, detectedProcess, detectedApplicationDate))
+                if (remaining <= 0) onComplete(PdfOcrResult(maxDefermentMonths, detectedApplicationDate))
             }
         }
     }
 
-    data class AgreementResult(val debt: Int, val process: String, val deferment: Int, val excludedGuarantee: Int = 0, val excludedOther: Int = 0)
-
-    /**
-     * 합의서 PDF 이미지를 Gemini AI 비전으로 분석하여 대상채무, 제도 타입, 유예기간, 제외채무 추출
-     */
-    private fun callGeminiVisionForAgreement(bitmaps: List<Bitmap>, fileName: String): AgreementResult {
-        val apiKey = BuildConfig.GEMINI_API_KEY
-        val apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey"
-
-        val prompt = """이 PDF 이미지는 채무조정 합의서입니다. 다음 정보를 추출하세요.
-
-[1] 제도 타입 (문서 제목에서만 판단! 우선순위 중요!)
-★ 반드시 "제 목:" 또는 첫 페이지 상단 제목에서만 판단! 본문 표/내용은 무시!
-★★★ 우선순위: 신속 > 사전 > 개인채무조정 확정 (먼저 해당되면 그것으로!)
-- 제목에 "신속채무조정" 글자가 포함 → 무조건 "신" (다른 키워드 무시!)
-  예: "개인채무조정(신속채무조정(추가형)/특례) 확정 통지" → "신속채무조정" 포함 → "신"
-- 제목에 "사전채무조정" 글자가 포함 → "프"
-- 제목에 "신속"/"사전" 글자가 없고 "개인채무조정" + "확정" → "워"
-  예: "개인채무조정 확정 통지" → 신속/사전 없음 → "워"
-  예: "개인채무조정 확정 통지서" → 신속/사전 없음 → "워"
-- 해당없으면 → ""
-
-[2] 합계 전 원금 (대상채무)
-- 표 구조: 각 채권자마다 "조정" 컬럼에 위쪽 행이 "전" (조정 전), 아래쪽 행이 "후" (조정 후) 입니다
-- ★★★ "합계" 행에서도 위쪽 "전" 행의 "원금"을 가져오세요! 아래쪽 "후" 행의 값이 아닙니다!
-- "전" 원금은 "후" 원금보다 큽니다. 더 큰 금액이 "전" 원금입니다
-- 단위는 원(won)입니다. 콤마 포맷 숫자를 원 단위 정수로 반환
-
-[3] 유예기간 (거치기간)
-- "유예기간" 또는 "거치기간" 다음에 나오는 개월 수
-- 없으면 0
-
-[4] 개인채무조정에서 제외된 채무내역 (표가 있는 경우만)
-- "제외된 채무내역" 또는 "개인채무조정에서 제외된 채무내역" 표에서:
-  - 제외사유가 "보증서 담보대출" 또는 "보증서담보대출"인 행의 원금 합계 (원 단위)
-  - 그 외 제외사유인 행의 원금 합계 (원 단위)
-- 표가 없으면 둘 다 0
-
-반드시 JSON만 응답:
-{"agreementDebt": 숫자(원단위), "processName": "문자열", "defermentMonths": 숫자, "excludedGuaranteeDebt": 숫자(원단위), "excludedOtherDebt": 숫자(원단위)}"""
-
-        // parts 배열 구성: 텍스트 프롬프트 + 이미지들
-        val parts = JSONArray()
-        parts.put(JSONObject().put("text", prompt))
-
-        for ((idx, bitmap) in bitmaps.withIndex()) {
-            val baos = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, baos)
-            val imageBytes = baos.toByteArray()
-            val base64Str = android.util.Base64.encodeToString(imageBytes, android.util.Base64.NO_WRAP)
-
-            val inlineData = JSONObject()
-                .put("mimeType", "image/jpeg")
-                .put("data", base64Str)
-            parts.put(JSONObject().put("inlineData", inlineData))
-            Log.d("FILE_PROCESS", "합의서 Gemini: 이미지 ${idx + 1}/${bitmaps.size} 추가 (${imageBytes.size} bytes)")
-        }
-
-        val content = JSONObject().put("parts", parts)
-        val contents = JSONArray().put(content)
-        val requestBody = JSONObject().put("contents", contents)
-
-        val conn = URL(apiUrl).openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.setRequestProperty("Content-Type", "application/json")
-        conn.doOutput = true
-        conn.connectTimeout = 120000
-        conn.readTimeout = 120000
-
-        conn.outputStream.use { os ->
-            os.write(requestBody.toString().toByteArray(Charsets.UTF_8))
-        }
-
-        val responseCode = conn.responseCode
-        if (responseCode != 200) {
-            val errorBody = conn.errorStream?.let {
-                BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() }
-            } ?: "no error body"
-            Log.e("FILE_PROCESS", "합의서 Gemini API 오류 ($responseCode): $errorBody")
-            return AgreementResult(0, "", 0)
-        }
-
-        val response = BufferedReader(
-            InputStreamReader(conn.inputStream, Charsets.UTF_8)
-        ).use { it.readText() }
-
-        val jsonResponse = JSONObject(response)
-        var aiText = ""
-        try {
-            val candidates = jsonResponse.getJSONArray("candidates")
-            val firstCandidate = candidates.getJSONObject(0)
-            if (firstCandidate.has("content") && firstCandidate.getJSONObject("content").has("parts")) {
-                val responseParts = firstCandidate.getJSONObject("content").getJSONArray("parts")
-                for (i in 0 until responseParts.length()) {
-                    val p = responseParts.getJSONObject(i)
-                    if (p.has("text")) aiText = p.getString("text")
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("FILE_PROCESS", "합의서 Gemini 응답 파싱 실패: ${e.message}")
-            return AgreementResult(0, "", 0)
-        }
-
-        Log.d("FILE_PROCESS", "합의서 Gemini AI 응답: $aiText")
-
-        // JSON 추출
-        val jsonStr = aiText
-            .replace(Regex("```json\\s*"), "")
-            .replace(Regex("```\\s*"), "")
-            .trim()
-        val jsonStart = jsonStr.indexOf("{")
-        val jsonEnd = jsonStr.lastIndexOf("}")
-        if (jsonStart == -1 || jsonEnd == -1 || jsonEnd <= jsonStart) {
-            Log.e("FILE_PROCESS", "합의서 Gemini JSON 파싱 실패: $jsonStr")
-            return AgreementResult(0, "", 0)
-        }
-
-        val data = JSONObject(jsonStr.substring(jsonStart, jsonEnd + 1))
-        val debtWon = data.optLong("agreementDebt", 0)
-        val processName = data.optString("processName", "")
-        val defermentMonths = data.optInt("defermentMonths", 0)
-        val excludedGuaranteeWon = data.optLong("excludedGuaranteeDebt", 0)
-        val excludedOtherWon = data.optLong("excludedOtherDebt", 0)
-
-        val debtMan = if (debtWon > 0) (debtWon / 10000).toInt() else 0
-        val excludedGuaranteeMan = if (excludedGuaranteeWon > 0) (excludedGuaranteeWon / 10000).toInt() else 0
-        val excludedOtherMan = if (excludedOtherWon > 0) (excludedOtherWon / 10000).toInt() else 0
-        Log.d("FILE_PROCESS", "합의서 Gemini 결과: 대상채무=${debtMan}만(${debtWon}원), 제도=$processName, 유예=${defermentMonths}개월, 제외보증서=${excludedGuaranteeMan}만, 제외기타=${excludedOtherMan}만 ($fileName)")
-
-        return AgreementResult(debtMan, processName, defermentMonths, excludedGuaranteeMan, excludedOtherMan)
-    }
 
     /**
      * 상환내역서 PDF 이미지를 Gemini AI 비전으로 분석하여 신청일자, 유예기간 추출
@@ -613,8 +654,10 @@ class MainActivity : AppCompatActivity() {
 - 없으면 빈 문자열 ""
 
 [2] 유예기간 (거치기간)
-- "유예기간" 또는 "거치기간" 다음에 나오는 개월 수
-- 없으면 0
+- 반드시 "유예기간" 또는 "거치기간"이라는 텍스트가 이미지에 명시적으로 존재해야 합니다
+- "유예기간 N개월" 또는 "거치기간 N개월" 형태로 적혀있는 경우에만 해당 숫자를 추출
+- 상환금액 테이블의 회차, 소계, 납입횟수 등은 유예기간이 아닙니다
+- "유예기간" 또는 "거치기간"이라는 단어가 이미지에 없으면 반드시 0
 
 반드시 JSON만 응답:
 {"applicationDate": "YYYY.MM.DD", "defermentMonths": 숫자}"""
@@ -698,6 +741,306 @@ class MainActivity : AppCompatActivity() {
         Log.d("FILE_PROCESS", "상환내역서 Gemini 결과: 신청일자=$applicationDate, 유예=${defermentMonths}개월 ($fileName)")
 
         return Pair(applicationDate, defermentMonths)
+    }
+
+    private fun callGeminiVisionForAgreement(bitmaps: List<Bitmap>, fileName: String) {
+        val apiKey = BuildConfig.GEMINI_API_KEY
+        val apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey"
+
+        val prompt = """이 PDF 이미지들은 채무조정 체결합의서입니다. 다음 정보를 추출하세요.
+
+[1] 제도 타입 - 문서 첫 페이지 상단 제목/헤더에서 확인
+- "신속채무조정" → "신"
+- "사전채무조정" → "프"
+- "개인워크아웃" 또는 "개인채무조정 확정" → "워"
+- 해당없음 → ""
+- 주의: "사전채무조정"과 "개인채무조정"은 다른 제도임. 정확히 구분하세요.
+
+[2] 대상채무 - "채무별 조정내역" 테이블
+- 이 테이블은 "조정 전"과 "조정 후"로 나뉘어 있음
+- 맨 아래 "합계" 행에서 "조정 전" 원금 값(원 단위 숫자)을 totalPrincipal로 응답
+- summaryBefore/summaryAfter는 더 이상 사용하지 않으므로 빈 배열로 응답
+
+[3] 제외된 채무내역 원금 합계 (원 단위, 숫자만)
+- "제외된 채무내역" 테이블이 있으면 모든 행의 "원금잔액" 합계
+- 없으면 0
+
+[4] 유예기간 (개월 수)
+- "유예기간" 또는 "거치기간" 값
+- 없으면 0
+
+[5] 채권금융회사 목록
+- "채무별 조정내역" 테이블의 채권금융회사명과 조정 전 원금 (원 단위). 같은 채권사에 여러 대출과목/계좌가 있으면 조정 전 원금을 모두 합산
+- "제외된 채무내역" 테이블의 채권금융회사명, 원금 (원 단위), 채권분류 또는 대출종류
+- 두 테이블 모두에서 채권사명과 원금을 추출
+- 제외된 채무의 경우 "제외사유" 컬럼 값도 함께 추출 (예: "담보채무", "보증서담보대출", "소액채무" 등)
+
+반드시 JSON만 응답:
+{"processType": "신/프/워/빈문자열", "processTitle": "문서 제목 원문", "totalPrincipal": 합계행조정전원금숫자, "excludedDebtTotal": 숫자, "defermentMonths": 숫자, "creditors": [{"name": "채권사명", "principal": 원금숫자}, ...], "excludedCreditors": [{"name": "채권사명", "principal": 원금숫자, "reason": "제외사유"}, ...]}"""
+
+        val parts = JSONArray()
+        parts.put(JSONObject().put("text", prompt))
+
+        // 첫 페이지(테이블)와 제외채무 페이지 전송
+        for (bmp in bitmaps) {
+            val baos = ByteArrayOutputStream()
+            bmp.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+            val imageBytes = baos.toByteArray()
+            val base64Str = android.util.Base64.encodeToString(imageBytes, android.util.Base64.NO_WRAP)
+            val inlineData = JSONObject()
+                .put("mimeType", "image/jpeg")
+                .put("data", base64Str)
+            parts.put(JSONObject().put("inlineData", inlineData))
+        }
+        Log.d("FILE_PROCESS", "합의서 Gemini: ${bitmaps.size}페이지 전송 ($fileName)")
+
+        val content = JSONObject().put("parts", parts)
+        val contents = JSONArray().put(content)
+        val requestBody = JSONObject().put("contents", contents)
+
+        val conn = URL(apiUrl).openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.doOutput = true
+        conn.connectTimeout = 120000
+        conn.readTimeout = 120000
+
+        conn.outputStream.use { os ->
+            os.write(requestBody.toString().toByteArray(Charsets.UTF_8))
+        }
+
+        val responseCode = conn.responseCode
+        if (responseCode != 200) {
+            val errorBody = conn.errorStream?.let {
+                BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() }
+            } ?: "no error body"
+            Log.e("FILE_PROCESS", "합의서 Gemini API 오류 ($responseCode): $errorBody")
+            return
+        }
+
+        val response = BufferedReader(
+            InputStreamReader(conn.inputStream, Charsets.UTF_8)
+        ).use { it.readText() }
+
+        val jsonResponse = JSONObject(response)
+        var aiText = ""
+        try {
+            val candidates = jsonResponse.getJSONArray("candidates")
+            val firstCandidate = candidates.getJSONObject(0)
+            if (firstCandidate.has("content") && firstCandidate.getJSONObject("content").has("parts")) {
+                val responseParts = firstCandidate.getJSONObject("content").getJSONArray("parts")
+                for (i in 0 until responseParts.length()) {
+                    val p = responseParts.getJSONObject(i)
+                    if (p.has("text")) aiText = p.getString("text")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("FILE_PROCESS", "합의서 Gemini 응답 파싱 실패: ${e.message}")
+            return
+        }
+
+        Log.d("FILE_PROCESS", "합의서 Gemini AI 응답: $aiText")
+
+        val jsonStr = aiText
+            .replace(Regex("```json\\s*"), "")
+            .replace(Regex("```\\s*"), "")
+            .trim()
+        val jsonStart = jsonStr.indexOf("{")
+        val jsonEnd = jsonStr.lastIndexOf("}")
+        if (jsonStart == -1 || jsonEnd == -1 || jsonEnd <= jsonStart) {
+            Log.e("FILE_PROCESS", "합의서 Gemini JSON 파싱 실패: $jsonStr")
+            return
+        }
+
+        val data = JSONObject(jsonStr.substring(jsonStart, jsonEnd + 1))
+        val processType = data.optString("processType", "")
+        val processTitle = data.optString("processTitle", "")
+        // 합계 행의 조정 전 원금 직접 읽기
+        val totalPrincipal = data.optLong("totalPrincipal", 0L)
+        Log.d("FILE_PROCESS", "합의서 합계 조정전 원금: ${totalPrincipal} (${totalPrincipal / 10000}만)")
+        val excludedDebtTotal = data.optLong("excludedDebtTotal", 0L)
+        val deferMonths = data.optInt("defermentMonths", 0)
+
+        // Gemini의 processType 대신 processTitle 원문으로 직접 판단 (더 정확)
+        val detectedProcess = when {
+            processTitle.contains("새출발기금") -> "새"
+            processTitle.contains("사전채무조정") -> "프"
+            processTitle.contains("신속채무조정") -> "신"
+            processTitle.contains("개인워크아웃") -> "워"
+            processTitle.contains("개인채무조정") && !processTitle.contains("워크아웃") -> "프"
+            processType.isNotEmpty() -> processType  // fallback
+            else -> ""
+        }
+        Log.d("FILE_PROCESS", "합의서 Gemini 제목 원문: '$processTitle' → 제도='$detectedProcess' (Gemini판단='$processType')")
+        if (detectedProcess.isNotEmpty()) pdfAgreementProcess = detectedProcess
+        if (totalPrincipal > 0) pdfAgreementDebt = (totalPrincipal / 10000).toInt()
+        // excludedDebtTotal은 채권사별 담보 분류로 대체 (아래 excludedCreditorsArr 파싱에서 처리)
+        if (deferMonths > aiDefermentMonths) aiDefermentMonths = deferMonths
+
+        // 채권사 목록 파싱 (조정내역 + 제외채무)
+        pdfAgreementCreditors.clear()
+        val creditorsArr = data.optJSONArray("creditors")
+        if (creditorsArr != null) {
+            for (i in 0 until creditorsArr.length()) {
+                val c = creditorsArr.optJSONObject(i) ?: continue
+                val cName = c.optString("name", "").trim()
+                val cPrincipal = (c.optLong("principal", 0L) / 10000).toInt()
+                if (cName.length >= 2 && cPrincipal > 0) {
+                    pdfAgreementCreditors[cName] = (pdfAgreementCreditors[cName] ?: 0) + cPrincipal
+                }
+            }
+        }
+        val excludedCreditorsArr = data.optJSONArray("excludedCreditors")
+        var excludedDamboTotal = 0
+        var excludedGuaranteeTotal = 0
+        if (excludedCreditorsArr != null) {
+            for (i in 0 until excludedCreditorsArr.length()) {
+                val c = excludedCreditorsArr.optJSONObject(i) ?: continue
+                val cName = c.optString("name", "").trim()
+                val cPrincipal = (c.optLong("principal", 0L) / 10000).toInt()
+                val reason = c.optString("reason", "").trim()
+                if (cName.length >= 2 && cPrincipal > 0) {
+                    // 제외된 채권사는 pdfAgreementCreditors에 넣지 않음 (merge 비교 시 동일 채권사 비담보와 혼동 방지)
+                    // 제외사유: 보증서담보/지급보증 → 대상채무, 기타 담보(주택담보, 담보채무 등) → 담보
+                    val isGuarantee = reason.contains("보증서") || reason.contains("지급보증")
+                    if (isGuarantee) {
+                        excludedGuaranteeTotal += cPrincipal
+                    } else {
+                        excludedDamboTotal += cPrincipal
+                        pdfExcludedDamboCreditors.add(cName)
+                    }
+                    Log.d("FILE_PROCESS", "제외 채권사: $cName ${cPrincipal}만 (사유=$reason, 보증서=${isGuarantee})")
+                }
+            }
+        }
+        // 제외채무: 보증서담보→대상채무, 기타담보→담보
+        pdfExcludedGuaranteeDebt = excludedGuaranteeTotal
+        pdfExcludedOtherDebt = excludedDamboTotal
+        Log.d("FILE_PROCESS", "합의서 채권사: ${pdfAgreementCreditors.size}건 $pdfAgreementCreditors")
+
+        // totalPrincipal이 없으면 개별 채권사 합산으로 fallback
+        val creditorSum = pdfAgreementCreditors.values.sum()
+        if (totalPrincipal <= 0 && creditorSum > 0) {
+            pdfAgreementDebt = creditorSum
+            Log.d("FILE_PROCESS", "합의서 대상채무: 채권사합산 ${creditorSum}만 (합계행 없음)")
+        }
+
+        Log.d("FILE_PROCESS", "합의서 Gemini 결과: 제도=$processType, 대상채무=${pdfAgreementDebt}만, 제외채무=${pdfExcludedOtherDebt}만, 유예=${deferMonths}개월, 채권사=${pdfAgreementCreditors.size}건 ($fileName)")
+    }
+
+    // ============= 변제계획안 Gemini Vision =============
+    private fun callGeminiVisionForRecoveryPlan(bitmaps: List<Bitmap>, fileName: String) {
+        val apiKey = BuildConfig.GEMINI_API_KEY
+        val apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey"
+
+        val prompt = """이 PDF 이미지들은 개인회생 변제계획안입니다. 다음 정보를 추출하세요.
+
+[1] 대상채무 총액 (원 단위)
+- "채권자별 변제예정액의 산정내역" 테이블에서 "총계" 행의 "개인회생채권액" (확정채권액+미확정채권액 합산된 값)
+- 또는 "개인회생채권 목록" 등의 테이블에서 "합계"/"총계" 행의 가장 큰 금액
+
+[2] 월 변제금 (원 단위)
+- "채무자의 가용소득" 테이블에서 "⑤ 월 실제 가용소득" 값 (③-④)
+- 이것이 실제 월 변제금입니다
+- "③ 월 평균 가용소득"이 아니라 "⑤ 월 실제 가용소득"을 추출하세요
+
+[3] 변제기간 (개월 수)
+- "변제기간" 섹션에서 "XX개월간" 값
+- 또는 "⑥ 변제 횟수" 값
+
+반드시 JSON만 응답:
+{"totalDebt": 원단위숫자, "monthlyPayment": 월변제금원단위숫자, "repaymentMonths": 개월수숫자}"""
+
+        val parts = JSONArray()
+        parts.put(JSONObject().put("text", prompt))
+
+        for (bmp in bitmaps) {
+            val baos = ByteArrayOutputStream()
+            bmp.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+            val imageBytes = baos.toByteArray()
+            val base64Str = android.util.Base64.encodeToString(imageBytes, android.util.Base64.NO_WRAP)
+            val inlineData = JSONObject()
+                .put("mimeType", "image/jpeg")
+                .put("data", base64Str)
+            parts.put(JSONObject().put("inlineData", inlineData))
+        }
+        Log.d("FILE_PROCESS", "변제계획안 Gemini: ${bitmaps.size}페이지 전송 ($fileName)")
+
+        val content = JSONObject().put("parts", parts)
+        val contents = JSONArray().put(content)
+        val requestBody = JSONObject().put("contents", contents)
+
+        val conn = URL(apiUrl).openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.doOutput = true
+        conn.connectTimeout = 120000
+        conn.readTimeout = 120000
+
+        conn.outputStream.use { os ->
+            os.write(requestBody.toString().toByteArray(Charsets.UTF_8))
+        }
+
+        val responseCode = conn.responseCode
+        if (responseCode != 200) {
+            val errorBody = conn.errorStream?.let {
+                BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() }
+            } ?: "no error body"
+            Log.e("FILE_PROCESS", "변제계획안 Gemini API 오류 ($responseCode): $errorBody")
+            return
+        }
+
+        val response = BufferedReader(
+            InputStreamReader(conn.inputStream, Charsets.UTF_8)
+        ).use { it.readText() }
+
+        val jsonResponse = JSONObject(response)
+        var aiText = ""
+        try {
+            val candidates = jsonResponse.getJSONArray("candidates")
+            val firstCandidate = candidates.getJSONObject(0)
+            if (firstCandidate.has("content") && firstCandidate.getJSONObject("content").has("parts")) {
+                val responseParts = firstCandidate.getJSONObject("content").getJSONArray("parts")
+                for (i in 0 until responseParts.length()) {
+                    val p = responseParts.getJSONObject(i)
+                    if (p.has("text")) aiText = p.getString("text")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("FILE_PROCESS", "변제계획안 Gemini 응답 파싱 실패: ${e.message}")
+            return
+        }
+
+        Log.d("FILE_PROCESS", "변제계획안 Gemini AI 응답: $aiText")
+
+        val jsonStr = aiText
+            .replace(Regex("```json\\s*"), "")
+            .replace(Regex("```\\s*"), "")
+            .trim()
+        val jsonStart = jsonStr.indexOf("{")
+        val jsonEnd = jsonStr.lastIndexOf("}")
+        if (jsonStart == -1 || jsonEnd == -1 || jsonEnd <= jsonStart) {
+            Log.e("FILE_PROCESS", "변제계획안 Gemini JSON 파싱 실패: $jsonStr")
+            return
+        }
+
+        val data = JSONObject(jsonStr.substring(jsonStart, jsonEnd + 1))
+        val totalDebt = data.optLong("totalDebt", 0L)
+        val monthlyPayment = data.optLong("monthlyPayment", 0L)
+        val repaymentMonths = data.optInt("repaymentMonths", 0)
+
+        aiHasRecoveryPlan = true
+        if (totalDebt > 10000) {
+            pdfRecoveryDebt = (totalDebt / 10000).toInt()
+        }
+        if (monthlyPayment > 0) {
+            pdfRecoveryIncome = (monthlyPayment / 10000).toInt()
+        }
+        if (repaymentMonths > 0) {
+            pdfRecoveryMonths = repaymentMonths
+        }
+
+        Log.d("FILE_PROCESS", "변제계획안 Gemini 결과: 대상채무=${pdfRecoveryDebt}만, 월변제금=${pdfRecoveryIncome}만, 변제기간=${pdfRecoveryMonths}개월 ($fileName)")
     }
 
     // ============= HWP 텍스트 추출 =============
@@ -1004,7 +1347,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
         Log.d("HWP_DATA", "추출된 텍스트:\n$text")
-        extractDataWithAI(text)
         parseHwpData(text)
         showToast("HWP 파일 읽기 완료")
     }
@@ -1025,20 +1367,15 @@ class MainActivity : AppCompatActivity() {
             return match?.groupValues?.get(1)?.trim() ?: line.trim()
         }
 
-        // AI에서 가져올 값 (기본값)
-        // ============= AI에서 가져올 값 =============
-        var income = aiIncome
-        var targetDebt = aiTargetDebt
-        var netProperty = aiProperty
-
-        // ★ AI 추출 값 직접 사용 (로직에서 중복 계산하지 않음)
-        var taxDebt = aiTaxDebt                        // 국세/세금 채무 (단기에만 포함, AI)
-        val majorCreditorFromAI = aiMajorCreditor      // 과반 채권사명 (AI)
-        val majorCreditorDebtFromAI = aiMajorCreditorDebt // 과반 채권사 채무 (AI)
-        var hasBusinessHistory = aiHasBusinessHistory   // 사업자 이력 (AI)
-        var businessStartYear = aiBusinessStartYear    // 개업 년도 (AI)
-        var businessStartMonth = aiBusinessStartMonth  // 개업 월 (AI)
-        var businessEndYear = aiBusinessEndYear        // 폐업 년도 (AI)
+        // ============= 텍스트 파싱 기반 값 (AI 미사용) =============
+        var income = 0
+        var targetDebt = 0
+        var netProperty = 0
+        var taxDebt = 0
+        var hasBusinessHistory = false
+        var businessStartYear = 0
+        var businessStartMonth = 0
+        var businessEndYear = 0
 
         // 보조 정보 (텍스트에서 파싱)
         var name = ""
@@ -1068,6 +1405,7 @@ class MainActivity : AppCompatActivity() {
         var carTotalLoan = 0
         var carMonthlyPayment = 0
         var carCount = 0
+        var hasJointCar = false  // 공동명의 차량 보유
         // 외제차 브랜드 키워드
         val foreignCarBrands = listOf("벤츠", "메르세데스", "BMW", "비엠더블유", "아우디", "렉서스", "포르쉐",
             "볼보", "미니쿠퍼", "테슬라", "폭스바겐", "토요타", "혼다", "닛산", "인피니티",
@@ -1109,35 +1447,77 @@ class MainActivity : AppCompatActivity() {
         var personalRecoveryMonth = 0
         var wantsCarSale = false  // 차량 처분 의사
         var childSupportAmount = 0  // 양육비 (만원)
+        val paidOffCreditorKeywords = mutableListOf<String>()  // 특이사항에서 완납된 채권사 키워드
         var telecomDebt = 0  // 기타채무 통신사 채무 (만원)
         val otherDebtCreditorNames = mutableListOf<String>()  // 기타채무 채권사명 (미협약 판단 제외용)
         val otherDebtEntries = mutableListOf<Pair<String, Int>>()  // 기타채무 실제 채권사 (이름, 금액만원)
         var childSupportReceiving = false  // 양육비 수급 (입금받음/양육O → 본인이 양육)
-        var nonAffiliatedDebt = aiNonAffiliatedDebt
-        // ★ 미협약 채무는 대상채무에 포함하지 않음 → 즉시 차감
-        if (nonAffiliatedDebt > targetDebt) nonAffiliatedDebt = targetDebt
-        targetDebt -= nonAffiliatedDebt
         var studentLoanTotal = 0   // 학자금 합계 (천원)
         var tableDebtTotal = 0     // 표 전체 합계 (천원, 제외항목 포함)
         // 대출과목 파싱 (표 없을 때 대상채무 fallback)
         var inLoanCategorySection = false // 대출과목 섹션 진입 여부 (신복위 파싱 제외용)
+        var inRegionField = false // 지역 필드 연속줄 감지용
+        var regionOwnership = "" // 지역 첫줄에서 감지한 명의 ("공동","본인","배우자")
+        var inPropertySection = false // 재산 필드 연속줄 감지용
+        var inJobSection = false      // 재직 필드 연속줄 감지용
+        var inIncomeSection = false   // 연봉 필드 연속줄 감지용
+        var inSpecialNotesSection = false // 특이사항 필드 연속줄 감지용
         var inOtherDebtSection = false   // 기타채무 섹션 진입 여부
+        var inCardUsageTableSection = false // 카드이용금액 테이블 섹션
+        val cardUsageCreditors = mutableSetOf<String>() // 카드이용금액 테이블에서 감지한 카드사명
+        val cardUsageAmountMap = mutableMapOf<String, Int>() // 카드이용금액 카드사별 금액 (만원)
         var textShinbokDebt = 0  // 대출과목에서 파싱한 신복위 채무 (만원, PDF 없을 때 사용)
         var textTaxDebt = 0      // 대출과목에서 파싱한 국세/세금 채무 (만원)
         val specialNotesList = ArrayList<String>()
         val recentDebtEntries = ArrayList<Pair<Calendar, Int>>() // (대출일, 금액_천원)
-        var parsedPropertyTotal = 0  // 재산줄에서 파싱한 재산 합계 (만원, AI 폴백용)
+        var parsedPropertyTotal = 0  // 재산줄에서 파싱한 재산 합계 (만원)
+        var parsedOthersProperty = 0  // 타인명의 재산 합계 (만원, ÷2 적용 후)
         var parsedDamboTotal = 0 // 표에서 파싱한 담보대출 합계 (만원)
         val parsedDamboCreditorNames = mutableSetOf<String>() // 담보로 제외된 채권사명
         var totalParsedDebt = 0  // 표에서 파싱한 모든 채무 합계 (만원, 담보 포함)
-        var parsed0041Total = 0  // 표에서 파싱한 현금서비스(0041) 합계 (만원, 카드이용금액과 중복)
+        val parsed0041Map = mutableMapOf<String, Int>()  // 현금서비스(0041) 카드사별 금액 (만원)
+        val parsedCreditorMap = mutableMapOf<String, Int>()  // 대상채무 채권사 (이름→금액만원)
+        var parsedCardUsageTotal = 0  // 기타채무 요약에서 파싱한 카드이용금액 합계 (만원)
         val debtDateAmountSeen = mutableMapOf<String, Boolean>() // "날짜_금액" → isGuarantee (보증채무 중복 제거용)
         val businessLoanDates = mutableMapOf<String, Int>() // 운전자금/개인사업자대출 날짜 → 금액(천원) (지급보증 중복 제거용)
         var recentDebtRatio = 0.0
         var postApplicationDebtMan = 0  // 신청일자 이후 추가채무 합계 (만원)
         var jiguBojungExcludedMan = 0  // 지급보증 중복 제외 금액 (만원)
+        var guaranteeDebtMan = 0  // 지급보증 채무 합계 (만원, 대상채무 포함분)
+        var daebuDebtMan = 0  // 대부 채무 합계 (만원)
+        var cardCapitalDebtMan = 0  // 카드/캐피탈 채무 합계 (만원)
         // ★ 과반 비율: 대상채무 확정 후 계산
         var majorCreditorRatio = 0.0
+
+        // ============= 사전 스캔: 운전자금 월 수집 → 같은 월 융자담보지보 스킵 =============
+        val unjeonMonths = mutableSetOf<String>()  // 운전자금 년.월 (예: "2018.05")
+        val yungjaSkipSeqs = mutableSetOf<Int>()   // 스킵할 융자담보지보 순번
+        data class DamboJiboEntry(val seq: Int, val yearMonth: String)
+        val damboJiboEntries = mutableListOf<DamboJiboEntry>()
+        for (rawLine in lines) {
+            val l = rawLine.trim().replace(Regex("\\s"), "")
+            val seqMatch = Pattern.compile("^(\\d{1,2})개인사업자대출").matcher(l)
+            if (seqMatch.find()) {
+                val seq = seqMatch.group(1)!!.toInt()
+                val dateMatch = Pattern.compile("(\\d{4})\\.(\\d{1,2})\\.\\d{1,2}").matcher(l)
+                if (dateMatch.find()) {
+                    val yearMonth = "${dateMatch.group(1)}.${dateMatch.group(2)!!.padStart(2, '0')}"
+                    if (l.contains("운전자금")) {
+                        unjeonMonths.add(yearMonth)
+                    } else if (l.contains("융자담보지보")) {
+                        damboJiboEntries.add(DamboJiboEntry(seq, yearMonth))
+                    }
+                }
+            }
+        }
+        val yungjaSkippedMonths = mutableSetOf<String>()  // 융자담보지보가 스킵된 월 (운전자금=지급보증 판단용)
+        for (entry in damboJiboEntries) {
+            if (entry.yearMonth in unjeonMonths) {
+                yungjaSkipSeqs.add(entry.seq)
+                yungjaSkippedMonths.add(entry.yearMonth)
+                Log.d("HWP_PRESCAN", "융자담보지보 스킵 (운전자금 동월): 순번=${entry.seq}, 월=${entry.yearMonth}")
+            }
+        }
 
         // ============= 사전 스캔: 대출과목 "차량담보" 등 순번 수집 (사이드바이사이드 테이블 대응) =============
         val studentLoanExcludedSeqs = mutableSetOf<Int>()  // 학자금 취업 후 상환 순번
@@ -1148,9 +1528,21 @@ class MainActivity : AppCompatActivity() {
             if (l.contains("대출과목") || (l.contains("현황순번") && l.contains("담보"))) preScanLoanCat = true
             // 종료 조건: "대출과목"이 같은 라인에 없을 때만 (병합 라인 "[요약][대출과목]" 대응)
             if (preScanLoanCat && !l.contains("대출과목") && !l.contains("현황순번") && (l.contains("요약사항") || l.contains("최저납부") || l.contains("요약]"))) preScanLoanCat = false
-            if (preScanLoanCat && (l.contains("담보") || l.contains("할부") || l.contains("리스") || l.contains("중도금"))) {
+            if (preScanLoanCat && (l.contains("담보") || l.contains("할부") || l.contains("리스") || l.contains("중도금") || l.contains("약관") || l.contains("후순위"))) {
+                // 콤마 구분 순번 감지: "7,8" "6,10" 등
+                val commaSeqM = Pattern.compile("(\\d{1,2}(?:,\\d{1,2})+)").matcher(l)
+                while (commaSeqM.find()) {
+                    val parts = commaSeqM.group(1)!!.split(",")
+                    for (part in parts) {
+                        val seqNum = part.toIntOrNull() ?: continue
+                        if (seqNum in 1..30) {
+                            excludedSeqNumbers.add(seqNum)
+                            Log.d("HWP_PRESCAN", "섹션기반 담보 순번(콤마): $seqNum - ${rawLine.trim()}")
+                        }
+                    }
+                }
                 // 병합 라인에서도 순번 감지: 숫자+비숫자(금융기관명) 패턴
-                val seqM = Pattern.compile("(\\d{1,2})[A-Za-z\uFF21-\uFF3A\uFF41-\uFF5A가-힣]").matcher(l)
+                val seqM = Pattern.compile("(\\d{1,2})(?![억만원천년,])[A-Za-z\uFF21-\uFF3A\uFF41-\uFF5A가-힣]").matcher(l)
                 while (seqM.find()) {
                     val seqNum = seqM.group(1)!!.toInt()
                     if (seqNum in 1..30) {
@@ -1160,7 +1552,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             // 패턴기반: "N + 채권사명 + 차량담보/차담보 등" (테이블 합쳐진 경우 대응, 영문/전각 대응)
-            val damboM = Pattern.compile("(\\d{1,2})([^\\d]{2,}?)(?:차량담보|차량할부|차량리스|자동차담보|차담보|집담보|중도금대출|중도금)").matcher(l)
+            val damboM = Pattern.compile("(\\d{1,2})(?!년)([^\\d]{2,}?)(?:차량담보|차량할부|차량리스|자동차담보|차담보|집담보|중도금대출|중도금)").matcher(l)
             while (damboM.find()) {
                 val seqNum = damboM.group(1)!!.toInt()
                 if (seqNum in 1..30) {
@@ -1170,7 +1562,7 @@ class MainActivity : AppCompatActivity() {
             }
             // 학자금 취업 후 상환 순번 수집
             if (preScanLoanCat && l.contains("학자금") && l.contains("취업")) {
-                val stuSeqM = Pattern.compile("(\\d{1,2})[A-Za-z\uFF21-\uFF3A\uFF41-\uFF5A가-힣]").matcher(l)
+                val stuSeqM = Pattern.compile("(\\d{1,2})(?![억만원천년])[A-Za-z\uFF21-\uFF3A\uFF41-\uFF5A가-힣]").matcher(l)
                 while (stuSeqM.find()) {
                     val seqNum = stuSeqM.group(1)!!.toInt()
                     if (seqNum in 1..30) {
@@ -1198,6 +1590,24 @@ class MainActivity : AppCompatActivity() {
             }
             if (inLoanCategorySection && !lineNoSpace.contains("대출과목") && (lineNoSpace.contains("요약사항") || lineNoSpace.contains("최저납부") || lineNoSpace.contains("요약]"))) {
                 inLoanCategorySection = false
+            }
+
+            // 필드 전환 감지 (연속줄 섹션 종료용)
+            val fieldCheckStr = lineNoSpace.trimStart('[', '［')
+            val isKnownField = fieldCheckStr.startsWith("성함") || fieldCheckStr.startsWith("전화") ||
+                    fieldCheckStr.startsWith("주민") || fieldCheckStr.startsWith("결혼") ||
+                    fieldCheckStr.startsWith("지역") || fieldCheckStr.startsWith("재직") ||
+                    fieldCheckStr.startsWith("재산") || fieldCheckStr.startsWith("차량") || fieldCheckStr.startsWith("차") ||
+                    fieldCheckStr.startsWith("연봉") || fieldCheckStr.startsWith("소득") ||
+                    fieldCheckStr.startsWith("사대보험") || fieldCheckStr.startsWith("배우자") ||
+                    fieldCheckStr.startsWith("보험내역") || fieldCheckStr.startsWith("채무조정") ||
+                    fieldCheckStr.startsWith("대출사용") || fieldCheckStr.startsWith("연체") ||
+                    fieldCheckStr.startsWith("특이") || fieldCheckStr.startsWith("장애") ||
+                    fieldCheckStr.startsWith("60세") || fieldCheckStr.startsWith("채무현황")
+            if (isKnownField) {
+                if (!fieldCheckStr.startsWith("재직")) inJobSection = false
+                if (!fieldCheckStr.startsWith("연봉") && !fieldCheckStr.startsWith("소득")) inIncomeSection = false
+                if (!fieldCheckStr.startsWith("특이")) inSpecialNotesSection = false
             }
 
             // 이름 추출
@@ -1232,13 +1642,23 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // 지역
+            // 지역 (연속줄 대응: 첫줄에 명의만 있고 둘째줄에 시세/대출이 있는 경우)
             if (lineNoSpace.contains("지역")) {
+                inRegionField = true
+                regionOwnership = when {
+                    lineNoSpace.contains("공동명의") -> "공동"
+                    lineNoSpace.contains("본인명의") -> "본인"
+                    lineNoSpace.contains("배우자명의") || (lineNoSpace.contains("배우자") && lineNoSpace.contains("명의")) -> "배우자"
+                    else -> ""
+                }
                 val regionVal = extractValue(line, "지역")
                 if (regionVal.isNotEmpty()) {
                     region = regionVal
-                    if (lineNoSpace.contains("배우자명의") || lineNoSpace.contains("배우자") && lineNoSpace.contains("명의")) {
-                        regionIsSpouseOwned = true
+                    if (regionOwnership == "배우자") {
+                        // 월세가 아닌 배우자명의 부동산만 등본분리 대상
+                        if (!lineNoSpace.contains("월세")) {
+                            regionIsSpouseOwned = true
+                        }
                         // 지역 배우자명의 시세/대출 파싱 → ÷2
                         val siseMatch = Pattern.compile("시세\\s*(\\d+억?\\s*\\d*천?\\s*\\d*만?)").matcher(line)
                         val loanMatch = Pattern.compile("대출\\s*(\\d+억?\\s*\\d*천?\\s*\\d*만?)").matcher(line)
@@ -1247,27 +1667,92 @@ class MainActivity : AppCompatActivity() {
                         regionSpouseProperty = maxOf((regionSise - regionLoan) / 2, 0)
                         Log.d("HWP_PARSE", "지역 배우자명의 감지: 시세${regionSise}만 - 대출${regionLoan}만 → ÷2 = ${regionSpouseProperty}만")
                     }
-                    // 지역 본인명의 시세/대출 파싱 → parsedPropertyTotal에 합산
-                    if (lineNoSpace.contains("본인명의") && lineNoSpace.contains("시세")) {
+                    // 월세 보증금 → 재산 (배우자명의면 ÷2)
+                    if (lineNoSpace.contains("월세") && lineNoSpace.contains("보증금")) {
+                        val bojung = extractAmountAfterKeyword(line, "보증금")
+                        if (bojung > 0) {
+                            val appliedBojung = if (regionOwnership == "배우자") bojung / 2 else bojung
+                            parsedPropertyTotal += appliedBojung
+                            if (regionOwnership == "배우자") {
+                                Log.d("HWP_PARSE", "지역 월세 보증금 재산 (배우자명의): ${bojung}만 → ÷2 = ${appliedBojung}만")
+                            } else {
+                                Log.d("HWP_PARSE", "지역 월세 보증금 재산: ${bojung}만")
+                            }
+                        }
+                    }
+                    // 지역 본인명의 시세/대출/보증금 파싱 → parsedPropertyTotal에 합산
+                    else if (lineNoSpace.contains("본인명의") && (lineNoSpace.contains("시세") || lineNoSpace.contains("공시지가") || lineNoSpace.contains("보증금"))) {
                         val groups = Regex("\\([^)]+\\)").findAll(regionVal).toList()
                         for (group in groups) {
                             val g = group.value
                             if (g.contains("배우자") || g.contains("타인") || g.contains("부모")) continue
                             if (!g.contains("본인명의") && !g.contains("공동명의")) continue
-                            val siseAmt = extractAmountAfterKeyword(g, "시세").takeIf { it > 0 }
-                                ?: extractAmountAfterKeyword(g, "공시지가")
+                            val rawSise = extractAmountAfterKeyword(g, "시세").takeIf { it > 0 }
+                                ?: extractAmountAfterKeyword(g, "공시지가").takeIf { it > 0 }
+                            val bojungAmt = extractAmountAfterKeyword(g, "보증금")
+                            val siseAmt = rawSise ?: bojungAmt.takeIf { it > 0 } ?: 0
                             val loanAmt = extractAmountAfterKeyword(g, "대출")
-                            val net = maxOf(siseAmt - loanAmt, 0)
+                            val deductBojung = if (rawSise != null && rawSise > 0) bojungAmt else 0
+                            val net = maxOf(siseAmt - loanAmt - deductBojung, 0)
                             parsedPropertyTotal += net
                             Log.d("HWP_PARSE", "지역 본인명의 재산: 시세${siseAmt}만 - 대출${loanAmt}만 = ${net}만")
                         }
                     }
                 }
+            } else if (inRegionField && !lineNoSpace.contains("지역")) {
+                // 지역 연속줄: 다른 필드 레이블이면 종료
+                val isNextField = lineNoSpace.startsWith("재산") || lineNoSpace.startsWith("재직") ||
+                        lineNoSpace.startsWith("소득") || lineNoSpace.startsWith("연봉") ||
+                        lineNoSpace.startsWith("결혼") || lineNoSpace.startsWith("차량") ||
+                        lineNoSpace.startsWith("보험") || lineNoSpace.startsWith("채무") ||
+                        lineNoSpace.startsWith("특이") || lineNoSpace.startsWith("연락")
+                if (isNextField) {
+                    inRegionField = false
+                } else if (lineNoSpace.contains("시세") || lineNoSpace.contains("공시지가") || lineNoSpace.contains("보증금")) {
+                    // 첫줄 명의 유지 ("본인명의 대출"은 소유형태가 아니라 대출주체)
+                    val lineOwnership = regionOwnership
+                    val rawSise = extractAmountAfterKeyword(line, "시세").takeIf { it > 0 }
+                        ?: extractAmountAfterKeyword(line, "공시지가").takeIf { it > 0 }
+                    val bojungAmt = extractAmountAfterKeyword(line, "보증금")
+                    val siseAmt = rawSise ?: bojungAmt.takeIf { it > 0 } ?: 0
+                    val loanAmt = extractAmountAfterKeyword(line, "대출")
+                    val deductBojung = if (rawSise != null && rawSise > 0) bojungAmt else 0
+                    val net = maxOf(siseAmt - loanAmt - deductBojung, 0)
+                    when (lineOwnership) {
+                        "공동" -> {
+                            val half = net / 2
+                            parsedPropertyTotal += half
+                            Log.d("HWP_PARSE", "지역 연속줄 공동명의: 시세${siseAmt}만 - 대출${loanAmt}만 = ${net}만 → ÷2 = ${half}만")
+                        }
+                        "배우자" -> {
+                            regionIsSpouseOwned = true
+                            regionSpouseProperty = net / 2
+                            Log.d("HWP_PARSE", "지역 연속줄 배우자명의: 시세${siseAmt}만 - 대출${loanAmt}만 = ${net}만 → ÷2 = ${regionSpouseProperty}만")
+                        }
+                        else -> { // 본인명의
+                            parsedPropertyTotal += net
+                            Log.d("HWP_PARSE", "지역 연속줄 본인명의: 시세${siseAmt}만 - 대출${loanAmt}만 = ${net}만")
+                        }
+                    }
+                    inRegionField = false // 시세 처리 후 종료
+                }
             }
 
-            // 재산 필드 파싱 (AI 폴백용)
+            // 재산 필드 파싱 (연속줄 지원)
             if (lineNoSpace.startsWith("재산") && !lineNoSpace.contains("채무") && !lineNoSpace.contains("대출과목")) {
-                val propertyVal = extractValue(line, "재산")
+                inPropertySection = true
+            } else if (inPropertySection) {
+                val isNextField = lineNoSpace.startsWith("차량") || lineNoSpace.startsWith("차") ||
+                        lineNoSpace.startsWith("연봉") || lineNoSpace.startsWith("소득") ||
+                        lineNoSpace.startsWith("사대보험") || lineNoSpace.startsWith("보험") ||
+                        lineNoSpace.startsWith("배우자") || lineNoSpace.startsWith("채무") ||
+                        lineNoSpace.startsWith("특이") || lineNoSpace.startsWith("연체") ||
+                        lineNoSpace.startsWith("장애") || lineNoSpace.startsWith("60세") ||
+                        lineNoSpace.startsWith("재직") || lineNoSpace.startsWith("결혼")
+                if (isNextField) inPropertySection = false
+            }
+            if (inPropertySection && !lineNoSpace.contains("채무") && !lineNoSpace.contains("대출과목")) {
+                val propertyVal = if (lineNoSpace.startsWith("재산")) extractValue(line, "재산") else line.trim()
                 val propertyNoSpace = propertyVal.replace(Regex("\\s"), "")
                 if (propertyNoSpace.isNotEmpty() && !propertyNoSpace.matches(Regex("[xX×없0].*"))) {
                     val groups = Regex("\\([^)]+\\)").findAll(propertyVal).toList()
@@ -1283,12 +1768,27 @@ class MainActivity : AppCompatActivity() {
                             Log.d("HWP_PARSE", "분양권 감지 (재산 제외): ${bSise}만 - 대출${bLoan}만 = ${bunyangGwonNet}만 (원문: $g)")
                             continue
                         }
-                        val isOthers = g.contains("배우자") || g.contains("타인") || g.contains("부모") || g.contains("형제") || g.contains("상대방")
-                        val siseAmt = extractAmountAfterKeyword(g, "시세").takeIf { it > 0 }
-                            ?: extractAmountAfterKeyword(g, "공시지가")
+                        val isSpouseOwned = g.contains("배우자")
+                        val isOthers = isSpouseOwned || g.contains("타인") || g.contains("부모") || g.contains("형제") || g.contains("상대방")
+                        // 배우자 명의 재산은 재산에 포함하지 않음
+                        if (isSpouseOwned) {
+                            Log.d("HWP_PARSE", "재산 배우자명의 제외: $g")
+                            continue
+                        }
+                        val rawSise = extractAmountAfterKeyword(g, "시세").takeIf { it > 0 }
+                            ?: extractAmountAfterKeyword(g, "공시지가").takeIf { it > 0 }
+                        val bojungAmt = extractAmountAfterKeyword(g, "보증금")
+                        val siseAmt = rawSise
+                            ?: bojungAmt.takeIf { it > 0 }
+                            ?: extractAmount(g)
                         val loanAmt = extractAmountAfterKeyword(g, "대출")
-                        val net = maxOf(siseAmt - loanAmt, 0)
-                        parsedPropertyTotal += if (isOthers) net / 2 else net
+                        val seipjaAmt = extractAmountAfterKeyword(g, "세입자")
+                        // 시세가 있으면 보증금 차감, 보증금만 있으면 보증금이 재산가치
+                        val deductBojung = if (rawSise != null && rawSise > 0) bojungAmt else 0
+                        val net = maxOf(siseAmt - loanAmt - seipjaAmt - deductBojung, 0)
+                        val appliedNet = if (isOthers) net / 2 else net
+                        parsedPropertyTotal += appliedNet
+                        if (isOthers) parsedOthersProperty += appliedNet
                     }
                     if (groups.isEmpty()) {
                         val amt = extractAmount(propertyVal)
@@ -1299,11 +1799,10 @@ class MainActivity : AppCompatActivity() {
             }
 
             // 부동산 소유 형태 감지 (타인명의 vs 본인/공동명의)
-            val isRealEstateLine = (lineNoSpace.contains("시세") || lineNoSpace.contains("공시지가") ||
+            val isRealEstateLine = (inRegionField || inPropertySection) &&
+                    (lineNoSpace.contains("시세") || lineNoSpace.contains("공시지가") ||
                     lineNoSpace.contains("아파트") || lineNoSpace.contains("건물") ||
-                    lineNoSpace.contains("분양권") || lineNoSpace.contains("전세")) &&
-                    !lineNoSpace.contains("차량") && !lineNoSpace.contains("자동차") &&
-                    !Pattern.compile("\\d{2}년식").matcher(lineNoSpace).find()
+                    lineNoSpace.contains("분양권") || lineNoSpace.contains("전세"))
             if (isRealEstateLine) {
                 val isOthersPropertyLine = lineNoSpace.contains("상대방") || lineNoSpace.contains("타인")
                 // "명의" 포함 but 본인/공동이 아니면 타인명의, 상대방/타인 맥락도 타인
@@ -1325,12 +1824,12 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // 재직/직업
-            if (lineNoSpace.contains("재직")) {
-                val job = extractValue(line, "재직")
+            // 재직/직업 (연속줄 지원)
+            if (lineNoSpace.contains("재직")) inJobSection = true
+            if (inJobSection) {
+                val job = if (lineNoSpace.contains("재직")) extractValue(line, "재직") else line.trim()
                 if (job.contains("사업자") || job.contains("개인사업") || job.contains("자영업") || job.contains("음식점")) {
                     isBusinessOwner = true
-                    // 현재 사업자로 재직 중이면 폐업 년도 초기화 (AI가 잘못 추출한 경우 보정)
                     if (!job.contains("폐업")) {
                         businessEndYear = 0
                     }
@@ -1348,19 +1847,17 @@ class MainActivity : AppCompatActivity() {
 
             // ============= 전역 감지 (줄 위치 무관, 2줄 이어쓰기 대응) =============
 
-            // ★ 사업자 이력: AI가 추출하지만, 로직에서도 보조 감지 (AI값이 없을 때 폴백)
+            // ★ 사업자 이력 감지 (텍스트 파싱)
             if (!hasBusinessHistory) {
                 if ((lineNoSpace.contains("자영업") || (lineNoSpace.contains("개인사업") && !lineNoSpace.contains("사업자대출")) ||
                             lineNoSpace.contains("폐업") || lineNoSpace.contains("사업자") && lineNoSpace.contains("개시") ||
                             lineNoSpace.contains("사업자") && (lineNoSpace.contains("년") || lineNoSpace.contains("매출"))) && !lineNoSpace.contains("사업자대출")) {
 
                     if (!specialNotesList.any { it.contains("사업자") || it.contains("자영업") || it.contains("폐업") }) {
-                        // 년도 정보는 아래에서 최종 취합 시 추가
                         specialNotesList.add("사업자이력")
                     }
-                    // 개업/폐업 년도/월 파싱 (AI 값이 없을 때만)
                     if (businessStartYear == 0) {
-                        val bizYearPattern = Pattern.compile("(\\d{2,4})년\\s*(?:(\\d{1,2})월\\s*)?개업")
+                        val bizYearPattern = Pattern.compile("(\\d{2,4})년도?\\s*(?:(\\d{1,2})월\\s*)?개업")
                         val bizYearMatcher = bizYearPattern.matcher(line)
                         if (bizYearMatcher.find()) {
                             val y = bizYearMatcher.group(1)!!.toInt()
@@ -1370,26 +1867,32 @@ class MainActivity : AppCompatActivity() {
                                 businessStartMonth = monthStr.toInt()
                             }
                         }
+                        // "개인사업자(17년)" 형식: 괄호 안 연도만 있고 "개업" 키워드 없는 경우
+                        if (businessStartYear == 0) {
+                            val bizParenPattern = Pattern.compile("사업자\\s*\\(\\s*(\\d{2,4})년").matcher(line)
+                            if (bizParenPattern.find()) {
+                                val y = bizParenPattern.group(1)!!.toInt()
+                                businessStartYear = if (y < 100) 2000 + y else y
+                            }
+                        }
                     }
                     if (businessEndYear == 0) {
-                        val bizEndPattern = Pattern.compile("(\\d{2,4})년\\s*(?:\\d{1,2}월\\s*)?폐업")
+                        val bizEndPattern = Pattern.compile("(\\d{2,4})년도?\\s*(?:\\d{1,2}월\\s*)?폐업")
                         val bizEndMatcher = bizEndPattern.matcher(line)
                         if (bizEndMatcher.find()) {
                             val y = bizEndMatcher.group(1)!!.toInt()
                             businessEndYear = if (y < 100) 2000 + y else y
                         }
-                        // 폐업 년도가 없으면 0 유지 (현재 운영 중으로 간주)
                     }
 
                     // 사업 기간이 2020.04 ~ 2025.06과 겹치면 사업자이력 인정
                     if (businessStartYear > 0 && (businessStartYear < 2025 || (businessStartYear == 2025 && (businessStartMonth == 0 || businessStartMonth <= 6))) && (businessEndYear == 0 || businessEndYear >= 2020)) {
                         hasBusinessHistory = true
                     }
-                    // 사업자/자영업/개인사업 키워드 감지 시 isBusinessOwner도 설정 (재직: 줄과 분리된 경우 대응)
                     if (lineNoSpace.contains("사업자") || lineNoSpace.contains("개인사업") || lineNoSpace.contains("자영업")) {
                         isBusinessOwner = true
                     }
-                    Log.d("HWP_PARSE", "사업자 이력 보조 감지: $line (개업=$businessStartYear, 폐업=$businessEndYear)")
+                    Log.d("HWP_PARSE", "사업자 이력 감지: $line (개업=$businessStartYear, 폐업=$businessEndYear)")
                 }
             }
 
@@ -1401,7 +1904,7 @@ class MainActivity : AppCompatActivity() {
 
             // 도박/주식/코인 (변제율 조건) - 사용처 줄 외에도 감지
             if (lineNoSpace.contains("도박")) { hasGambling = true }
-            if (lineNoSpace.contains("주식") || lineNoSpace.contains("전액주식")) { hasStock = true }
+            if ((lineNoSpace.contains("주식") && !lineNoSpace.contains("주식회사")) || lineNoSpace.contains("전액주식")) { hasStock = true }
             if (lineNoSpace.contains("코인") || lineNoSpace.contains("비트코인") || lineNoSpace.contains("가상화폐")) { hasCrypto = true }
 
             // 배우자 모르게 진행 (필수일 때만 단기 불가 조건)
@@ -1441,6 +1944,9 @@ class MainActivity : AppCompatActivity() {
                 Log.d("HWP_PARSE", "압류 감지 제외 (${if (seizureNegated) "압류x" else "상대방/타인 재산"}): $line")
             }
 
+            // 연봉/소득 섹션 진입
+            if (lineNoSpace.contains("연봉") || lineNoSpace.startsWith("소득")) inIncomeSection = true
+
             // "월 소득 x", "소득 x" 감지 → AI 소득 무시
             if (lineNoSpace.contains("연봉") || lineNoSpace.contains("월소득")) {
                 val fieldVal = if (lineNoSpace.contains("연봉")) extractValue(line, "연봉") else extractValue(line, "소득")
@@ -1453,8 +1959,8 @@ class MainActivity : AppCompatActivity() {
             // "월 소득 N만" 직접 파싱 (AI 폴백용, 배우자소득 제외)
             // "수령액 없음/수령 없음" 등 실소득 없음 표현이 있으면 제외
             // ★ "순수익"이 명시되어 있으면 순수익 값 우선 사용
-            if ((lineNoSpace.contains("월소득") || lineNoSpace.contains("연봉") || lineNoSpace.contains("순수익")) && !lineNoSpace.contains("배우자")) {
-                if (lineNoSpace.contains("수령") && (lineNoSpace.contains("없") || lineNoSpace.contains("0"))) {
+            if ((lineNoSpace.contains("월소득") || lineNoSpace.contains("연봉") || lineNoSpace.contains("순수익")) && !lineNoSpace.contains("배우자") && !lineNoSpace.contains("예상") && !lineNoSpace.contains("예정") && !inSpecialNotesSection) {
+                if (lineNoSpace.contains("수령") && (lineNoSpace.contains("없") || lineNoSpace.contains("수령0") || lineNoSpace.contains("수령x") || lineNoSpace.contains("수령X"))) {
                     parsedMonthlyIncome = 0
                     Log.d("HWP_PARSE", "실수령액 없음 감지 → parsedMonthlyIncome 초기화 ($line)")
                 } else {
@@ -1463,8 +1969,8 @@ class MainActivity : AppCompatActivity() {
                     val netIncomeDeficit = lineNoSpace.contains("순수익") &&
                             (lineNoSpace.contains("적자") || lineNoSpace.contains("마이너스") || lineNoSpace.contains("순수익-") || lineNoSpace.contains("순수익0"))
                     if (netIncomeDeficit) {
-                        parsedMonthlyIncome = 0
-                        Log.d("HWP_PARSE", "순수익 적자 감지 → parsedMonthlyIncome=0 ($line)")
+                        // 순수익 0/적자 → 이 항목은 0만 합산 (기존 소득 유지)
+                        Log.d("HWP_PARSE", "순수익 적자 감지 → +0만 (기존 소득 ${parsedMonthlyIncome}만 유지) ($line)")
                     } else if (netIncomeMatch != null) {
                         val netMax = netIncomeMatch.groupValues[2].toIntOrNull() ?: netIncomeMatch.groupValues[1].toInt()
                         if (netMax > 0) {
@@ -1480,14 +1986,72 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
                     } else {
-                        val monthlyMatch = Regex("월\\s*소득\\s*(\\d+)\\s*만").find(line)
-                        if (monthlyMatch != null) {
-                            val parsed = monthlyMatch.groupValues[1].toInt()
+                        // 괄호 안 금액 추출 (예: "연봉 5200만(369만)" → 369)
+                        val parenMatch = Regex("\\((\\d+)만\\)").find(line)
+                        val parenIncome = parenMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                        // "/" 또는 "," 뒤 월 소득 (예: "/ 월 소득 330만", "연 3000만(226만), 월 250만")
+                        val afterSlash = if (line.contains("/")) line.substringAfter("/")
+                            else if (line.contains(",")) line.substringAfter(",")
+                            else ""
+                        val slashRangeMatch = if (afterSlash.isNotEmpty()) Regex("(\\d+)\\s*[~～\\-]\\s*(\\d+)\\s*만").find(afterSlash) else null
+                        val slashIncomeMatch = if (afterSlash.isNotEmpty()) Regex("(\\d+)\\s*만").find(afterSlash) else null
+                        if (slashRangeMatch != null) {
+                            val slashParsed = maxOf(slashRangeMatch.groupValues[1].toInt(), slashRangeMatch.groupValues[2].toInt())
+                            val parsed = maxOf(slashParsed, parenIncome)
                             if (parsed > 0) {
-                                parsedMonthlyIncome += parsed
-                                Log.d("HWP_PARSE", "월소득 직접 파싱: ${parsed}만 → 합계=${parsedMonthlyIncome}만 ($line)")
+                                parsedMonthlyIncome = parsed
+                                Log.d("HWP_PARSE", "/ 뒤 월소득 범위 파싱: 슬래시=${slashParsed}만, 괄호=${parenIncome}만 → ${parsed}만 ($line)")
+                            }
+                        } else if (slashIncomeMatch != null) {
+                            val slashParsed = slashIncomeMatch.groupValues[1].toInt()
+                            val parsed = maxOf(slashParsed, parenIncome)
+                            if (parsed > 0) {
+                                parsedMonthlyIncome = parsed
+                                Log.d("HWP_PARSE", "/ 뒤 월소득 파싱: 슬래시=${slashParsed}만, 괄호=${parenIncome}만 → ${parsed}만 ($line)")
+                            }
+                        } else {
+                            // "월 소득 200~220만" → 큰 값(220) 사용
+                            val rangeMatch = Regex("월\\s*소득[^\\d]*(\\d+)\\s*[~～\\-]\\s*(\\d+)\\s*만").find(line)
+                            val monthlyMatch = Regex("월\\s*소득[^\\d]*(\\d+)\\s*만").find(line)
+                            // 값에 "연봉"이 포함되면 연봉 금액 → *0.85/12로 월소득 변환 (예: "연봉 5300만")
+                            val annualMatch = if (lineNoSpace.contains("연봉")) Regex("연봉\\s*(\\d+)\\s*만").find(line) else null
+                            if (rangeMatch != null) {
+                                val val1 = rangeMatch.groupValues[1].toInt()
+                                val val2 = rangeMatch.groupValues[2].toInt()
+                                val parsed = maxOf(val1, val2)
+                                if (parsed > 0) {
+                                    parsedMonthlyIncome += parsed
+                                    Log.d("HWP_PARSE", "월소득 범위 파싱: ${val1}~${val2} → ${parsed}만 → 합계=${parsedMonthlyIncome}만 ($line)")
+                                }
+                            } else if (monthlyMatch != null) {
+                                val parsed = monthlyMatch.groupValues[1].toInt()
+                                if (parsed > 0) {
+                                    parsedMonthlyIncome += parsed
+                                    Log.d("HWP_PARSE", "월소득 직접 파싱: ${parsed}만 → 합계=${parsedMonthlyIncome}만 ($line)")
+                                }
+                            } else if (annualMatch != null) {
+                                val annualSalary = annualMatch.groupValues[1].toInt()
+                                val parsed = (annualSalary * 0.85 / 12).toInt()
+                                if (parsed > 0) {
+                                    parsedMonthlyIncome += parsed
+                                    Log.d("HWP_PARSE", "연봉→월소득 변환: 연봉${annualSalary}만 × 0.85 ÷ 12 = ${parsed}만 → 합계=${parsedMonthlyIncome}만 ($line)")
+                                }
                             }
                         }
+                    }
+                }
+            }
+
+            // 연봉 연속줄: 기존 키워드 없지만 소득 섹션 내 금액 → 추가 소득
+            // "소득"이 포함되지만 ">"가 없는 라인(예: 전년도 사업소득 882만)은 월소득 환산이 아니므로 제외
+            if (inIncomeSection && !lineNoSpace.contains("월소득") && !lineNoSpace.contains("연봉") && !lineNoSpace.contains("순수익") && !lineNoSpace.contains("배우자") && !isKnownField
+                && !(lineNoSpace.contains("소득") && !line.contains(">"))) {
+                val extraIncomeMatch = Regex("(\\d+)\\s*만").find(line)
+                if (extraIncomeMatch != null) {
+                    val extra = extraIncomeMatch.groupValues[1].toInt()
+                    if (extra in 1..9999) {
+                        parsedMonthlyIncome += extra
+                        Log.d("HWP_PARSE", "연봉 연속줄 소득 추가: ${extra}만 → 합계=${parsedMonthlyIncome}만 ($line)")
                     }
                 }
             }
@@ -1497,9 +2061,10 @@ class MainActivity : AppCompatActivity() {
                 val hasIncomeMonth = Regex("(?<!\\d)월").containsMatchIn(lineNoSpace)  // "4월" 등 날짜 월 제외
                 if (lineNoSpace.contains("소득") || lineNoSpace.contains("연봉") || lineNoSpace.contains("월급") || hasIncomeMonth) {
                     isIncomeEstimated = true
-                    // "월 350만 예정", "월 350만 예상" 등에서 금액 추출
+                    // "월 350만 예정", "월 350만 예상", "예상 260만" 등에서 금액 추출
                     val incomeMatch = Regex("월\\s*(\\d+)만\\s*(?:예정|예상)").find(line)
                         ?: Regex("(\\d+)만\\s*(?:예정|예상)").find(line)
+                        ?: Regex("(?:예상|예정)\\s*(\\d+)\\s*만").find(line)
                     if (incomeMatch != null) {
                         val parsed = incomeMatch.groupValues[1].toInt()
                         if (parsed > 0) {
@@ -1513,7 +2078,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             // 한국주택금융공사 집담보 감지
-            if (lineNoSpace.contains("한국주택금융공사")) {
+            if (lineNoSpace.contains("주택금융공사")) {
                 hasHfcMortgage = true
                 Log.d("HWP_PARSE", "한국주택금융공사 집담보 감지: $line")
             }
@@ -1554,10 +2119,10 @@ class MainActivity : AppCompatActivity() {
                 Log.d("HWP_PARSE", "건강보험 체납 감지: $line")
             }
 
-            // 보험약관대출 감지 (대상채무 제외)
-            if (lineNoSpace.contains("보험약관대출") || lineNoSpace.contains("약관대출")) {
+            // 보험 대출 감지 (대상채무 제외)
+            if (lineNoSpace.contains("보험") && (lineNoSpace.contains("대출") || lineNoSpace.contains("약관"))) {
                 hasInsurancePolicyLoan = true
-                Log.d("HWP_PARSE", "보험약관대출 감지: $line")
+                Log.d("HWP_PARSE", "보험대출 감지: $line")
             }
 
             // 전세대출 질권설정 없음 감지 → 대상채무 포함
@@ -1863,6 +2428,8 @@ class MainActivity : AppCompatActivity() {
                     count = 0
                 } else if (afterColon.trim().equals("x", true)) {
                     count = 0
+                } else if (afterColon.trim().let { it.startsWith("O", true) || it.startsWith("ㅇ") }) {
+                    count = 1
                 }
                 if (count > 0) parentCount = count
             }
@@ -1870,13 +2437,40 @@ class MainActivity : AppCompatActivity() {
             // 대출사용처 (전역 감지로 이동됨 - 여기서는 추가 키워드만)
             // 도박/주식/코인은 위 전역 감지에서 처리
 
-            // 특이사항
+            // 특이사항 (연속줄 지원)
             if (lineNoSpace.contains("특이사항") || lineNoSpace.contains("특이:") || lineNoSpace.contains("특이：")) {
-                val content = extractValue(line, "특이사항")
+                inSpecialNotesSection = true
+            }
+            if (inSpecialNotesSection) {
+                val content = if (lineNoSpace.contains("특이사항") || lineNoSpace.contains("특이:") || lineNoSpace.contains("특이："))
+                    extractValue(line, "특이사항") else line.trim()
                 if (content.isNotEmpty() && !content.equals("x", true)) {
+                    // 월 생활비 → 소득으로 적용
+                    val livingExpMatch = Regex("생활비\\s*(\\d+)\\s*만").find(content)
+                    if (livingExpMatch != null && parsedMonthlyIncome == 0) {
+                        parsedMonthlyIncome = livingExpMatch.groupValues[1].toInt()
+                        Log.d("HWP_PARSE", "특이사항 생활비 → 소득 적용: ${parsedMonthlyIncome}만 ($content)")
+                    }
+                    // 수당 (자녀수당, 양육수당 등) → 소득에 합산
+                    val allowanceMatch = Regex("수당\\s*[:：]?\\s*(\\d+)\\s*만").find(content)
+                    if (allowanceMatch != null) {
+                        val allowance = allowanceMatch.groupValues[1].toInt()
+                        parsedMonthlyIncome += allowance
+                        Log.d("HWP_PARSE", "특이사항 수당 → 소득 합산: +${allowance}만 → ${parsedMonthlyIncome}만 ($content)")
+                    }
+                    // 완납 채권사 감지 (예: "국민카드 완납", "삼성카드 완납함")
+                    if (content.contains("완납")) {
+                        val creditorKws = listOf("국민", "신한", "삼성", "현대", "롯데", "하나", "우리", "비씨", "농협", "수협", "씨티", "카카오", "토스", "케이뱅크")
+                        for (kw in creditorKws) {
+                            if (content.contains(kw)) {
+                                paidOffCreditorKeywords.add(kw)
+                                Log.d("HWP_PARSE", "특이사항 완납 채권사 감지: $kw ($content)")
+                            }
+                        }
+                    }
+
                     content.split("[,，/]".toRegex()).forEach { part ->
                         val trimmed = part.trim()
-                        // 자동 감지 항목은 중복 방지
                         val isAutoDetected = trimmed.equals("x", true) ||
                                 trimmed.contains("모르게") || trimmed.contains("경매") || trimmed.contains("압류") ||
                                 trimmed.contains("도박") || trimmed.contains("주식") || trimmed.contains("코인") ||
@@ -1955,7 +2549,11 @@ class MainActivity : AppCompatActivity() {
                     (Pattern.compile("\\d{2}년").matcher(lineNoSpace).find() &&
                             (lineNoSpace.contains("시세") || lineNoSpace.contains("본인명의") || lineNoSpace.contains("배우자명의"))))
 
-            wasCarLine = isCarLine
+            // 부동산 관련 키워드가 포함되면 차량 아님 (지역 줄 오인식 방지)
+            if (isCarLine && !lineNoSpace.contains("차량") && (lineNoSpace.contains("아파트") || lineNoSpace.contains("주택") ||
+                        lineNoSpace.contains("빌라") || lineNoSpace.contains("오피스텔") || lineNoSpace.contains("부동산"))) {
+                isCarLine = false
+            }
             val isMainCarLine = lineNoSpace.contains("시세") || Pattern.compile("\\d{2}년식").matcher(lineNoSpace).find()
             // 대출과목 엔트리 패턴 감지: "순번+금융기관명+차량담보" → 차량 추가대출 아님
             val startsWithSeqInst = Pattern.compile("^\\d{1,2}[가-힣]").matcher(lineNoSpace).find()
@@ -1978,7 +2576,12 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 isCarLine = false
+            } else if (isCarLine && startsWithSeqInst && !isMainCarLine) {
+                // 순번+기관명으로 시작하는 채무 테이블 행은 차량 아님
+                Log.d("HWP_PARSE", "차량 감지 제외 (채무 테이블 행): $line")
+                isCarLine = false
             }
+            wasCarLine = isCarLine
 
             if (isCarLine) {
                 if (lineNoSpace.contains("장기렌트") || lineNoSpace.contains("렌트") || lineNoSpace.contains("리스")) {
@@ -2012,8 +2615,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (carSise == 0) carSise = extractAmount(line)
                 var carLoan = 0
-                if (lineNoSpace.contains("담보") || lineNoSpace.contains("할부") || lineNoSpace.contains("대출")) {
-                    carLoan = maxOf(extractAmountAfterKeyword(lineNoSpace, "담보"), extractAmountAfterKeyword(lineNoSpace, "할부"))
+                if (lineNoSpace.contains("담보") || lineNoSpace.contains("대출")) {
+                    carLoan = extractAmountAfterKeyword(lineNoSpace, "담보")
                     carLoan = maxOf(carLoan, extractAmountAfterKeyword(lineNoSpace, "대출"))
                 }
                 // 시세/대출/월납 모두 없으면 실제 차량 아님 (라벨만 있는 경우 등)
@@ -2022,26 +2625,12 @@ class MainActivity : AppCompatActivity() {
                 if (monthlyM.find()) carMonthly = monthlyM.group(1)!!.toInt()
                 if (carSise == 0 && carLoan == 0 && carMonthly == 0) continue
 
+                val isJointCar = lineNoSpace.contains("공동명의") || lineNoSpace.contains("공동")
                 val isSpouseCar = lineNoSpace.contains("배우자명의") || lineNoSpace.contains("배우자")
                 if (isSpouseCar) {
-                    // 배우자 지분율 파싱 (예: "배우자99", "배우자명의99%")
-                    var spousePercent = 50 // 기본 50/50
-                    val afterBaeuja = lineNoSpace.substringAfter("배우자")
-                    val pctM = Pattern.compile("^[명의지분]*(\\d{1,3})").matcher(afterBaeuja)
-                    if (pctM.find()) {
-                        val numEnd = pctM.end()
-                        val isYear = numEnd < afterBaeuja.length && afterBaeuja[numEnd] == '년'
-                        if (!isYear) {
-                            val pct = pctM.group(1)!!.toInt()
-                            if (pct in 1..100) spousePercent = pct
-                        }
-                    }
-                    if (spousePercent > 50) {
-                        // 배우자 지분 과반 → 본인 지분 미미하므로 차량 계산 제외
-                        Log.d("HWP_PARSE", "배우자 지분 ${spousePercent}% → 차량 계산 제외: $line")
-                        continue
-                    }
-                    carSise /= 2; carLoan /= 2
+                    // 배우자 명의 차량은 재산에 포함하지 않음
+                    Log.d("HWP_PARSE", "배우자명의 차량 제외: $line")
+                    continue
                 }
                 // 외제차 여부 판별
                 val isForeignCar = foreignCarBrands.any { brand -> lineNoSpace.contains(brand, ignoreCase = true) }
@@ -2051,27 +2640,47 @@ class MainActivity : AppCompatActivity() {
                 // 개별 차량 정보 저장: [시세, 대출, 월납부, 배우자(1/0), 외제(1/0)]
                 carInfoList.add(intArrayOf(carSise, carLoan, carMonthly, if (isSpouseCar) 1 else 0, if (isForeignCar) 1 else 0))
                 carCount++
-                Log.d("HWP_PARSE", "차량 파싱: 시세=$carSise, 담보=$carLoan, 월납=$carMonthly, 배우자=$isSpouseCar, 외제=$isForeignCar, 누적시세=$carTotalSise, 누적담보=$carTotalLoan")
+                if (isJointCar) hasJointCar = true
+                Log.d("HWP_PARSE", "차량 파싱: 시세=$carSise, 담보=$carLoan, 월납=$carMonthly, 배우자=$isSpouseCar, 공동=$isJointCar, 외제=$isForeignCar, 누적시세=$carTotalSise, 누적담보=$carTotalLoan")
             }
 
             // 차량 라인은 채무 파싱에서 제외 (중복 카운트 방지)
             if (wasCarLine) continue
 
-            // 6개월 이내 채무 파싱
+            // 카드이용금액 테이블 섹션 감지 (채무 파싱 전에 체크)
+            if (lineNoSpace.contains("카드사") && lineNoSpace.contains("이용금액")) {
+                inCardUsageTableSection = true
+            }
+            if (inCardUsageTableSection && !lineNoSpace.contains("카드사")) {
+                if (lineNoSpace.contains("대출과목") || lineNoSpace.contains("기타채무") || lineNoSpace.contains("요약") ||
+                    lineNoSpace.contains("특이") || lineNoSpace.contains("채무조정") || lineNoSpace.isBlank()) {
+                    inCardUsageTableSection = false
+                }
+            }
+
+            // 6개월 이내 채무 파싱 (카드이용 테이블 안에서는 건너뛰기)
             var loanYear = 0; var loanMonth = 0; var loanDay = 0
             val dateMatcher = Pattern.compile("(\\d{4})[.\\-](\\d{1,2})[.\\-](\\d{1,2})").matcher(line)
             val dateMatcher2 = Pattern.compile("(\\d{2})년\\s*(\\d{1,2})월\\s*(\\d{1,2})일?").matcher(line)
             val dateMatcher3 = Pattern.compile("(\\d{2})년\\s*(\\d{1,2})월").matcher(line)
             val dateMatcher4 = Pattern.compile("^(\\d{2})년\\s+").matcher(line)
+            val dateMatcher5 = Pattern.compile("(?<!\\d)(20\\d{2})[.\\-](\\d{1,2})(?!\\d)").matcher(line)
+            val dateMatcher6 = Pattern.compile("(?<!\\d)(20\\d{2})(?!\\d)").matcher(line)
 
-            if (dateMatcher.find()) {
-                loanYear = dateMatcher.group(1)!!.toInt(); loanMonth = dateMatcher.group(2)!!.toInt(); loanDay = dateMatcher.group(3)!!.toInt()
-            } else if (dateMatcher2.find()) {
-                loanYear = 2000 + dateMatcher2.group(1)!!.toInt(); loanMonth = dateMatcher2.group(2)!!.toInt(); loanDay = dateMatcher2.group(3)!!.toInt()
-            } else if (dateMatcher3.find()) {
-                loanYear = 2000 + dateMatcher3.group(1)!!.toInt(); loanMonth = dateMatcher3.group(2)!!.toInt(); loanDay = 15
-            } else if (dateMatcher4.find()) {
-                loanYear = 2000 + dateMatcher4.group(1)!!.toInt(); loanMonth = 1; loanDay = 1
+            if (!inCardUsageTableSection) {
+                if (dateMatcher.find()) {
+                    loanYear = dateMatcher.group(1)!!.toInt(); loanMonth = dateMatcher.group(2)!!.toInt(); loanDay = dateMatcher.group(3)!!.toInt()
+                } else if (dateMatcher2.find()) {
+                    loanYear = 2000 + dateMatcher2.group(1)!!.toInt(); loanMonth = dateMatcher2.group(2)!!.toInt(); loanDay = dateMatcher2.group(3)!!.toInt()
+                } else if (dateMatcher3.find()) {
+                    loanYear = 2000 + dateMatcher3.group(1)!!.toInt(); loanMonth = dateMatcher3.group(2)!!.toInt(); loanDay = 15
+                } else if (dateMatcher4.find()) {
+                    loanYear = 2000 + dateMatcher4.group(1)!!.toInt(); loanMonth = 1; loanDay = 1
+                } else if (dateMatcher5.find()) {
+                    loanYear = dateMatcher5.group(1)!!.toInt(); loanMonth = dateMatcher5.group(2)!!.toInt(); loanDay = 1
+                } else if (dateMatcher6.find()) {
+                    loanYear = dateMatcher6.group(1)!!.toInt(); loanMonth = 1; loanDay = 1
+                }
             }
 
             val hasFinancialKeyword = line.contains("은행") || line.contains("캐피탈") || line.contains("카드") ||
@@ -2079,13 +2688,35 @@ class MainActivity : AppCompatActivity() {
                     line.contains("공사") || line.contains("재단") || line.contains("농협") ||
                     line.contains("신협") || line.contains("새마을") || line.contains("생명") ||
                     line.contains("화재") || line.contains("공단") || line.contains("대부") ||
+                    line.contains("기금") || line.contains("뱅크") ||
                     line.contains("피에프씨") || line.contains("PFC") || line.contains("테크놀로지") ||
                     line.contains("머니무브") || line.contains("사금융") || line.contains("일수") ||
                     line.contains("통신") || line.contains("텔레콤") || line.contains("모바일")
 
-            if (loanYear > 0) {
+            // 날짜 없는 채무현황 "순번X 채권사 금액" 형식 → 대상채무 + 채권사맵에 추가 (기타채무/대출과목 섹션 제외)
+            // 헤더 순서 고정: 순번, 구분, 대출종류, 기관명, 발생일자, 금액
+            if (loanYear == 0 && !inOtherDebtSection && !inLoanCategorySection && !inPropertySection && !inRegionField && lineNoSpace.matches(Regex("^순?번?\\d{1,2}.+\\d+만.*"))) {
+                val seqCreditorM = Pattern.compile("순?번?(\\d{1,2})\\s*(.+?)\\s+(\\d[\\d,]*)만").matcher(line.trim())
+                if (seqCreditorM.find()) {
+                    val fullMiddle = seqCreditorM.group(2)!!.trim()
+                    val columns = fullMiddle.split(Regex("\\s+"))
+                    // 컬럼이 4개 이상(구분/대출종류/기관명/발생일자)이면 3번째(기관명)만 추출
+                    val credName = if (columns.size >= 4) columns[2] else fullMiddle
+                    val loanType = if (columns.size >= 4) columns[1] else ""
+                    val amountMan = seqCreditorM.group(3)!!.replace(",", "").toIntOrNull() ?: 0
+                    if (loanType.contains("담보")) {
+                        Log.d("HWP_PARSE", "채무현황 순번 파싱: 담보 제외 - $credName ${amountMan}만 - $line")
+                    } else if (credName.length >= 2 && amountMan > 0) {
+                        totalParsedDebt += amountMan
+                        parsedCreditorMap[credName] = (parsedCreditorMap[credName] ?: 0) + amountMan
+                        Log.d("HWP_PARSE", "채무현황 순번 파싱: $credName ${amountMan}만 - $line")
+                    }
+                }
+            }
+
+            if (loanYear > 0 && !inSpecialNotesSection && !inPropertySection && !inRegionField) {
                 var debtAmount = 0
-                if (line.contains("만")) {
+                if (line.contains("만") || line.contains("억")) {
                     debtAmount = extractAmount(line) * 10
                 } else {
                     val commaM = Pattern.compile("([\\d,]+)$").matcher(line.trim())
@@ -2096,6 +2727,12 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 if (debtAmount > 0) {
+                    // 채권사명 추출: 금융기관 키워드 포함 토큰 찾기
+                    val creditorTokens = line.trim().split(Regex("\\s+"))
+                    val creditorFinKws = listOf("은행", "캐피탈", "카드", "금융", "저축", "보증", "공사", "재단", "농협", "신협", "새마을", "생명", "화재", "공단", "대부", "뱅크", "피에프씨", "테크놀로지", "머니무브", "통신", "텔레콤", "모바일", "자산관리", "추심", "기금")
+                    val creditorToken = creditorTokens.firstOrNull { tok -> creditorFinKws.any { tok.contains(it) } && !tok.contains("대출") }
+                    val rawCreditorName = creditorToken?.replace(Regex("\\([^)]*\\)"), "")?.replace(Regex("[\\s]"), "")?.trim() ?: ""
+
                     // 담보대출 처리: 지급보증 제외한 담보대출은 담보로 계산 (대상채무 제외)
                     // 전세대출(270): 질권설정 없으면(jeonseNoJilgwon) 대상채무 포함, 있으면 담보
                     val isJeonse270 = (lineNoSpace.contains("전세") || lineNoSpace.contains("(270)")) && !jeonseNoJilgwon
@@ -2103,20 +2740,39 @@ class MainActivity : AppCompatActivity() {
                     val is290 = lineNoSpace.contains("(290)") || lineNoSpace.contains("기타담보대출")
                     val lineFor담보 = if (is290) lineNoSpace.replace("기타담보대출", "").replace("기타담보", "") else lineNoSpace
                     // (290) 순번이 대출과목에서 담보로 확인된 경우
-                    val rowSeqM = Pattern.compile("^(\\d{1,2})[\\s가-힣]").matcher(line.trimStart())
+                    val rowSeqM = Pattern.compile("^(\\d{1,2})(?!년)[\\s가-힣]").matcher(line.trimStart())
                     val rowSeqNum = if (rowSeqM.find()) rowSeqM.group(1)!!.toInt() else -1
                     val is290DamboByCategory = is290 && rowSeqNum > 0 && excludedSeqNumbers.contains(rowSeqNum)
                     // 대출과목에서 담보/할부로 확인된 순번 → 담보 처리
                     val isDamboByPreScan = rowSeqNum > 0 && excludedSeqNumbers.contains(rowSeqNum)
+                    // PDF 제외 담보 채권사와 매칭 → (290) 담보 판단
+                    val is290DamboByPdf = is290 && rawCreditorName.length >= 2 && pdfExcludedDamboCreditors.any { pdfName ->
+                        val pdfNorm = pdfName.replace(Regex("\\(주\\)|\\(유\\)|주식회사|유한회사|[\\s\\(\\)]"), "")
+                        pdfNorm.contains(rawCreditorName.replace(Regex("\\[.*?\\]"), "")) || rawCreditorName.replace(Regex("\\[.*?\\]"), "").contains(pdfNorm)
+                    }
                     if (is290) {
-                        Log.d("HWP_PARSE", "기타담보대출(290) 감지: rowSeqNum=$rowSeqNum, excluded=$excludedSeqNumbers, byCategory=$is290DamboByCategory - $line")
+                        Log.d("HWP_PARSE", "기타담보대출(290) 감지: rowSeqNum=$rowSeqNum, excluded=$excludedSeqNumbers, byCategory=$is290DamboByCategory, byPdf=$is290DamboByPdf - $line")
                     }
                     if (isDamboByPreScan && !is290) {
                         Log.d("HWP_PARSE", "대출과목 담보 순번 매칭: rowSeqNum=$rowSeqNum - $line")
                     }
-                    val isDamboLoan = ((lineFor담보.contains("담보") || is290DamboByCategory || isDamboByPreScan || lineNoSpace.contains("할부금융") || lineNoSpace.contains("리스") || lineNoSpace.contains("후순위") || lineNoSpace.contains("중고차할부") || lineNoSpace.contains("신차할부") || lineNoSpace.contains("(500)") || lineNoSpace.contains("(510)") || lineNoSpace.contains("시설자금") || lineNoSpace.contains("(1071)") || isJeonse270) && !lineNoSpace.contains("지급보증") && !lineNoSpace.contains("(240)") && !lineNoSpace.contains("무담보"))
+                    val loanTypeToken = creditorTokens.firstOrNull { it.contains("대출") && it.contains(Regex("\\(\\d+\\)")) } ?: ""
+                    val isInsurancePolicyLoan = loanTypeToken.contains("보험") || lineNoSpace.contains("(약관)") || lineNoSpace.contains("약관대출")
+                    val isDamboLoan = ((lineFor담보.contains("담보") || is290DamboByCategory || is290DamboByPdf || isDamboByPreScan || lineNoSpace.contains("할부금융") || lineNoSpace.contains("리스") || lineNoSpace.contains("후순위") || lineNoSpace.contains("중고차할부") || lineNoSpace.contains("신차할부") || lineNoSpace.contains("(500)") || lineNoSpace.contains("(510)") || lineNoSpace.contains("시설자금") || lineNoSpace.contains("(1071)") || lineNoSpace.contains("중도금") || isJeonse270 || isInsurancePolicyLoan) && !lineNoSpace.contains("지급보증") && !lineNoSpace.contains("(240)") && !lineNoSpace.contains("무담보"))
+
+                    // 지급보증(3021): 담보/비담보 전부 대상채무 제외
+                    if (lineNoSpace.contains("(3021)")) {
+                        Log.d("HWP_PARSE", "지급보증(3021) 제외: ${(debtAmount+5)/10}만 - $line")
+                        continue
+                    }
 
                     // 운전자금+지급보증 같은 날짜 중복 제거: 둘 중 높은 금액만 계산
+                    // 융자담보지보 스킵 (운전자금 동월 → 같은 채무)
+                    if (rowSeqNum > 0 && yungjaSkipSeqs.contains(rowSeqNum)) {
+                        Log.d("HWP_PARSE", "융자담보지보 스킵 (운전자금 동월, 순번=$rowSeqNum): $line")
+                        continue
+                    }
+
                     val isJiguBojung = lineNoSpace.contains("지급보증")
                     val isBusinessLoan = (lineNoSpace.contains("운전자금") || lineNoSpace.contains("개인사업자대출") || lineNoSpace.contains("사업자대출")) && !isJiguBojung
                     val loanDateKey = "${loanYear}.${loanMonth}.${loanDay}"
@@ -2173,18 +2829,28 @@ class MainActivity : AppCompatActivity() {
 
                             if (isDamboLoan) {
                                 parsedDamboTotal += (debtAmount + 5) / 10
-                                // 담보 채권사명 수집 (AI 채권사와 매칭)
-                                for (aiName in aiCreditorNames) {
-                                    if (lineNoSpace.contains(aiName.replace(Regex("[\\s]"), ""))) {
-                                        parsedDamboCreditorNames.add(aiName)
-                                    }
-                                }
+                                if (rawCreditorName.length >= 2) parsedDamboCreditorNames.add(rawCreditorName)
+                                if (isInsurancePolicyLoan) hasInsurancePolicyLoan = true
                                 Log.d("HWP_PARSE", "담보대출 (대상채무 제외): $line")
                             }
-                            // 현금서비스(0041)는 카드이용금액과 중복 → 별도 집계
+                            // 현금서비스(0041) → 카드사별 집계
                             if (lineNoSpace.contains("(0041)") || lineNoSpace.contains("현금서비스")) {
-                                parsed0041Total += (debtAmount + 5) / 10
+                                val amountMan0041 = (debtAmount + 5) / 10
+                                parsed0041Map[rawCreditorName] = (parsed0041Map[rawCreditorName] ?: 0) + amountMan0041
+                                Log.d("HWP_PARSE", "현금서비스(0041): $rawCreditorName ${amountMan0041}만 - $line")
                             }
+
+                            // parsedCreditorMap에 채권사 추가 (비담보만 - PDF 비교 및 과반 계산용)
+                            if (rawCreditorName.length >= 2 && !isDamboLoan) {
+                                val amountMan = (debtAmount + 5) / 10
+                                parsedCreditorMap[rawCreditorName] = (parsedCreditorMap[rawCreditorName] ?: 0) + amountMan
+                                // 변제율 판단용 채무 유형별 집계
+                                val unjeonYearMonth = if (loanYear > 0 && loanMonth > 0) "${loanYear}.${loanMonth.toString().padStart(2, '0')}" else ""
+                                if (lineNoSpace.contains("지급보증") || (lineNoSpace.contains("운전자금") && unjeonYearMonth in yungjaSkippedMonths)) guaranteeDebtMan += amountMan
+                                if (rawCreditorName.contains("대부")) daebuDebtMan += amountMan
+                                if (rawCreditorName.contains("카드") || rawCreditorName.contains("캐피탈")) cardCapitalDebtMan += amountMan
+                            }
+
                             if (!isDamboLoan && hasFinancialKeyword) {
                                 // 학자금 합산: 취업 후 상환만 대상채무에서 제외, 일반 상환은 포함
                                 if (lineNoSpace.contains("학자금") || lineNoSpace.contains("(150)") || lineNoSpace.contains("장학재단")) {
@@ -2223,8 +2889,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 // 대출과목에서 담보 순번 수집 (현황순번 + 담보 키워드)
-                val loanCatSeqM = Pattern.compile("^(\\d+)").matcher(lineNoSpace)
-                if (loanCatSeqM.find() && (lineNoSpace.contains("담보") || lineNoSpace.contains("할부") || lineNoSpace.contains("리스"))) {
+                val loanCatSeqM = Pattern.compile("^(\\d+)(?!년)").matcher(lineNoSpace)
+                if (loanCatSeqM.find() && (lineNoSpace.contains("담보") || lineNoSpace.contains("할부") || lineNoSpace.contains("리스") || lineNoSpace.contains("약관"))) {
                     val seqNum = loanCatSeqM.group(1)!!.toInt()
                     excludedSeqNumbers.add(seqNum)
                     Log.d("HWP_PARSE", "대출과목 담보 순번 감지: 순번$seqNum - $line")
@@ -2235,6 +2901,34 @@ class MainActivity : AppCompatActivity() {
                     if (amountMatcher.find()) {
                         textTaxDebt = amountMatcher.group(1)!!.replace(",", "").toInt()
                         Log.d("HWP_PARSE", "대출과목 국세/세금 감지: ${textTaxDebt}만 - $line")
+                    }
+                }
+            }
+
+            // 카드이용금액 테이블 섹션 감지 (개별 카드사를 채권사로 추가)
+            if (lineNoSpace.contains("카드사") && lineNoSpace.contains("이용금액")) {
+                inCardUsageTableSection = true
+            } else if (inCardUsageTableSection) {
+                // 빈 라인이나 다른 섹션 시작시 종료
+                if (lineNoSpace.contains("대출과목") || lineNoSpace.contains("기타채무") || lineNoSpace.contains("요약") ||
+                    lineNoSpace.contains("특이") || lineNoSpace.contains("채무조정")) {
+                    inCardUsageTableSection = false
+                } else {
+                    val cardAmountMatcher = Pattern.compile("(\\d[\\d,]*)만").matcher(lineNoSpace)
+                    if (cardAmountMatcher.find()) {
+                        val cardAmount = cardAmountMatcher.group(1)!!.replace(",", "").toIntOrNull() ?: 0
+                        // 첫 번째 금액 앞까지만 카드명 (병합 테이블의 뒤쪽 데이터 제외)
+                        val cardName = lineNoSpace.substring(0, cardAmountMatcher.start()).trim()
+                        if (cardName.isNotEmpty() && cardAmount > 0) {
+                            val fullCardName = cardName + "카드"
+                            cardUsageCreditors.add(fullCardName)
+                            cardUsageAmountMap[fullCardName] = (cardUsageAmountMap[fullCardName] ?: 0) + cardAmount
+                            Log.d("HWP_PARSE", "카드이용금액 테이블: $fullCardName ${cardAmount}만 - $line")
+                            if (!parsedCreditorMap.keys.any { it.contains(fullCardName) || (it.contains(cardName) && it.contains("카드")) }) {
+                                parsedCreditorMap[fullCardName] = 0  // 채권사 수 카운트용 (금액은 parsedCardUsageTotal에서 합산)
+                                Log.d("HWP_PARSE", "카드이용금액 테이블 채권사 추가: $fullCardName - $line")
+                            }
+                        }
                     }
                 }
             }
@@ -2261,8 +2955,15 @@ class MainActivity : AppCompatActivity() {
                         val isSummary = summaryKeywords.any { creditorName.replace(Regex("[0-9.\\s]"), "").startsWith(it) }
                         if (!isSummary && amountMan > 0) {
                             otherDebtEntries.add(Pair(creditorName, amountMan))
+                            parsedCreditorMap[creditorName] = (parsedCreditorMap[creditorName] ?: 0) + amountMan
                             Log.d("HWP_PARSE", "기타채무 실제 채권사: $creditorName ${amountMan}만 - $line")
                         } else {
+                            val cleanName = creditorName.replace(Regex("[0-9.\\s]"), "")
+                            // 카드이용금액 합계 파싱
+                            if (cleanName.startsWith("카드") && amountMan > 0) {
+                                parsedCardUsageTotal = amountMan
+                                Log.d("HWP_PARSE", "기타채무 카드이용금액 파싱: ${amountMan}만 - $line")
+                            }
                             Log.d("HWP_PARSE", "기타채무 요약 라인: $creditorName - $line")
                         }
                     }
@@ -2282,16 +2983,15 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 지급보증 중복분 대상채무에서 차감 (AI가 포함시킨 경우에만)
+        // 지급보증 중복분 대상채무에서 차감 (텍스트 파싱이 포함시킨 경우)
         if (jiguBojungExcludedMan > 0) {
-            // AI 채권사 목록에 보증재단/신용보증 채권사가 있으면 AI가 지급보증을 포함시킨 것 → 차감
-            val aiIncludedBojung = aiCreditorNames.any { it.contains("보증재단") || it.contains("신용보증") }
-            if (aiIncludedBojung) {
+            val parsedIncludedBojung = parsedCreditorMap.keys.any { it.contains("보증재단") || it.contains("신용보증") }
+            if (parsedIncludedBojung) {
                 targetDebt -= jiguBojungExcludedMan
                 if (targetDebt < 0) targetDebt = 0
                 Log.d("HWP_CALC", "지급보증 중복 차감: ${jiguBojungExcludedMan}만 → 대상채무=${targetDebt}만")
             } else {
-                Log.d("HWP_CALC", "지급보증 중복 차감 생략 (AI가 이미 제외): ${jiguBojungExcludedMan}만")
+                Log.d("HWP_CALC", "지급보증 중복 차감 생략 (파싱이 이미 제외): ${jiguBojungExcludedMan}만")
             }
         }
 
@@ -2319,99 +3019,199 @@ class MainActivity : AppCompatActivity() {
             Log.d("HWP_CALC", "합의서 PDF 제도 적용: $pdfAgreementProcess → $ongoingProcessName 진행중")
         }
 
-        // 합의서 대상채무 (PDF) vs 한글파일 채무 → 큰 쪽 사용 (AI가 신복 포함 추출하므로 합산하면 중복)
-        if (pdfAgreementDebt > 0) {
-            if (pdfAgreementDebt > targetDebt) {
-                Log.d("HWP_PARSE", "합의서 대상채무 적용: 한글=${targetDebt}만 < 합의서=${pdfAgreementDebt}만 → ${pdfAgreementDebt}만")
-                targetDebt = pdfAgreementDebt
+        // ★ 대상채무: 텍스트 파싱 기반 (AI 제거)
+        // 현금서비스(0041) 카드사별 비교: 카드이용금액 > 채무현황 → 채무현황 제외, 아니면 둘 다 포함
+        var deduct0041 = 0
+        for ((creditorName, amount0041) in parsed0041Map) {
+            // 카드이용금액 테이블에서 매칭되는 카드사 찾기
+            val matchedCardUsage = cardUsageAmountMap.entries.firstOrNull { (cardName, _) ->
+                creditorName.contains(cardName.replace("카드", "")) || cardName.contains(creditorName.replace("카드", "").take(2))
+            }
+            if (matchedCardUsage != null && matchedCardUsage.value > amount0041) {
+                // 카드이용금액이 더 크면: 0041을 채무에서 제외하고 카드이용금액만 사용
+                deduct0041 += amount0041
+                Log.d("HWP_CALC", "0041 제외: $creditorName ${amount0041}만 < 카드이용 ${matchedCardUsage.key} ${matchedCardUsage.value}만")
+            } else if (matchedCardUsage != null) {
+                // 0041 >= 카드이용금액: 0041이 이미 카드이용을 포함하므로 카드이용금액 중복 제거
+                parsedCardUsageTotal -= matchedCardUsage.value
+                Log.d("HWP_CALC", "카드이용 제외(0041에 포함): $creditorName 0041=${amount0041}만 >= 카드이용 ${matchedCardUsage.key} ${matchedCardUsage.value}만, 카드합계→${parsedCardUsageTotal}")
             } else {
-                Log.d("HWP_PARSE", "합의서 대상채무 무시: 한글=${targetDebt}만 >= 합의서=${pdfAgreementDebt}만 (AI가 이미 포함)")
+                Log.d("HWP_CALC", "0041 유지(카드이용 없음): $creditorName ${amount0041}만")
             }
         }
-        // 신복위 채무는 AI가 대상채무에 이미 포함 → textShinbokDebt 별도 합산 불필요
+        val parsedTargetDebt = totalParsedDebt - parsedDamboTotal - deduct0041
+        targetDebt = parsedTargetDebt + parsedCardUsageTotal
+        Log.d("HWP_CALC", "대상채무 (텍스트파싱): 총${totalParsedDebt}-담보${parsedDamboTotal}-0041제외${deduct0041}+카드${parsedCardUsageTotal} = ${targetDebt}만 | 0041맵=$parsed0041Map 카드맵=$cardUsageAmountMap")
 
-        // HWP 텍스트 채무현황 파싱 값이 AI보다 크면 → 표가 비어있어 AI가 못 잡은 경우
-        // 텍스트 채무 + 카드이용금액(별도 테이블)을 합산
-        // 현금서비스(0041)는 카드이용금액과 중복이므로 제외
-        val parsedTargetDebt = totalParsedDebt - parsedDamboTotal - parsed0041Total
-        val aiNonCardDebt = targetDebt - aiCardUsageTotal
-        Log.d("HWP_OVERRIDE", "★ 대상채무 비교: 텍스트파서=${parsedTargetDebt}만(총${totalParsedDebt}-담보${parsedDamboTotal}-0041=${parsed0041Total}) vs AI=${targetDebt}만(카드${aiCardUsageTotal}+비카드${aiNonCardDebt}) | AI담보=${aiDamboDebt} | excluded=$excludedSeqNumbers")
-        // AI가 채무현황(비카드)+카드이용금액 모두 파싱한 경우 → 텍스트 파서가 카드 관련 채무현황을 중복 포함하므로 AI 신뢰
-        // AI가 카드만 파싱하고 채무현황 못 잡은 경우(aiNonCardDebt≤0) 또는 카드 없는 경우 → 텍스트 파서 사용
-        // 차이가 카드이용금액+여유분보다 크면 → 카드 중복이 아닌 AI 누락이므로 텍스트 파서 사용
-        // (채무현황에 카드론/할부 등 카드 관련 대출이 있으면 카드이용금액과 차이가 날 수 있으므로 여유분 적용)
-        // AI 담보 > 텍스트 담보 → AI가 담보를 과분류(290 등), 텍스트 파서가 더 정확
-        val cardOverlapMargin = maxOf(aiCardUsageTotal / 3, 200)  // 카드 중복 허용 여유분
-        val aiOverClassifiedDambo = aiDamboDebt > parsedDamboTotal && parsedDamboTotal >= 0
-        var targetDebtOverridden = false
-        if (parsedTargetDebt > targetDebt && (aiCardUsageTotal == 0 || aiNonCardDebt <= 0 || parsedTargetDebt - targetDebt > aiCardUsageTotal + cardOverlapMargin || aiOverClassifiedDambo)) {
-            targetDebt = parsedTargetDebt + aiCardUsageTotal
-            targetDebtOverridden = true
-            Log.d("HWP_CALC", "HWP 텍스트 대상채무 > AI: 텍스트${parsedTargetDebt}만(0041제외${parsed0041Total}만) + 카드이용${aiCardUsageTotal}만 = ${targetDebt}만")
-            // 텍스트 파싱에 이미 신청일자 이후 채무 포함 → 중복 방지
-            postApplicationDebtMan = 0
-        }
-
-        // AI가 담보를 덜 잡은 경우 → 파서가 대출과목에서 추가 담보 감지 → AI 대상채무에서 차감
-        if (!targetDebtOverridden && parsedDamboTotal > aiDamboDebt) {
-            val missedDambo = parsedDamboTotal - aiDamboDebt
-            if (targetDebt >= missedDambo) {
-                targetDebt -= missedDambo
-                Log.d("HWP_CALC", "AI 담보 누락 보정: 파서담보=${parsedDamboTotal}만 > AI담보=${aiDamboDebt}만, ${missedDambo}만 차감 → 대상채무=${targetDebt}만")
+        // 완납 채권사 제외 (특이사항에서 감지) - 채무현황 금액만 제외, 카드이용금액은 유지
+        if (paidOffCreditorKeywords.isNotEmpty()) {
+            var paidOffDeduct = 0
+            val removedCreditors = mutableListOf<String>()
+            val iterator = parsedCreditorMap.entries.iterator()
+            while (iterator.hasNext()) {
+                val (credName, credAmount) = iterator.next()
+                val matched = paidOffCreditorKeywords.any { kw -> credName.contains(kw) }
+                if (matched && credAmount > 0) {
+                    paidOffDeduct += credAmount
+                    removedCreditors.add("$credName(${credAmount}만)")
+                    iterator.remove()
+                }
+            }
+            if (paidOffDeduct > 0) {
+                targetDebt -= paidOffDeduct
+                if (targetDebt < 0) targetDebt = 0
+                Log.d("HWP_CALC", "완납 채권사 제외: ${removedCreditors.joinToString()} → -${paidOffDeduct}만 → 대상채무=${targetDebt}만")
             }
         }
 
-        // 기타채무 통신사 → 대상채무에 합산 (AI가 이미 포함한 경우 스킵)
-        val aiAlreadyHasTelecom = aiCreditorNames.any {
-            it.contains("통신") || it.contains("텔레콤") || it.contains("모바일") ||
-            it.uppercase().let { u -> u.contains("SKT") || u.contains("KT") || u.contains("LG U") || u.contains("LGU") }
-        }
-        if (telecomDebt > 0 && !aiAlreadyHasTelecom) {
+        // 기타채무 통신사 → 대상채무에 합산
+        if (telecomDebt > 0) {
             targetDebt += telecomDebt
             Log.d("HWP_CALC", "기타채무 통신사: +${telecomDebt}만 → 대상채무 ${targetDebt}만")
-        } else if (telecomDebt > 0 && aiAlreadyHasTelecom) {
-            Log.d("HWP_CALC", "기타채무 통신사: AI가 이미 포함 → 스킵 (${telecomDebt}만)")
         }
 
-        // 기타채무 실제 채권사 → AI값 사용 시에만 차감 (override 시 채무현황에 이미 미포함)
-        if (otherDebtEntries.isNotEmpty() && !targetDebtOverridden) {
-            for ((otherName, otherAmount) in otherDebtEntries) {
-                val aiMatch = aiCreditorNames.any { aiName ->
-                    val aiNorm = aiName.replace(Regex("[\\s]"), "")
-                    aiNorm.contains(otherName) || otherName.contains(aiNorm)
+        // 신청일자 이후 추가채무 (특이사항 표시용, 채무현황 테이블에 이미 포함되어 있으므로 대상채무에 별도 합산 안 함)
+        if (postApplicationDebtMan > 0) {
+            Log.d("HWP_PARSE", "신청일자 이후 추가채무: ${postApplicationDebtMan}만 (테이블에 이미 포함)")
+        }
+
+        // 합의서 제외 채무: HWP에 이미 포함된 금액이므로 별도 합산하지 않음
+        // (제외 채권사 정보는 is290DamboByPdf로 담보 판단에만 활용)
+        if (pdfExcludedGuaranteeDebt > 0 || pdfExcludedOtherDebt > 0) {
+            Log.d("HWP_PARSE", "합의서 제외 채무 참고: 보증서=${pdfExcludedGuaranteeDebt}만, 담보=${pdfExcludedOtherDebt}만 (HWP에 이미 포함)")
+        }
+
+        // 합의서 PDF 채권사 + 한글파일 채권사 병합 (PDF 우선, 이름+금액 비교)
+        if (pdfAgreementCreditors.isNotEmpty()) {
+            // 한글파일 채권사명을 한글 변환 (ＮＨ농협→엔에이치농협 등)
+            fun normalizeCreditorName(name: String): String {
+                val cleaned = name.replace(Regex("\\[.*?\\]"), "").replace(Regex("[\\s\\(\\)]"), "")
+                    .map { ch -> when (ch) {
+                        in '\uFF10'..'\uFF19' -> (ch - 0xFEE0).toChar()
+                        else -> ch
+                    }}.joinToString("")
+                return AffiliateList.convertEnglishToKorean(cleaned)
+            }
+
+            val mergedMap = mutableMapOf<String, Int>()
+            // PDF 채권사 먼저 추가
+            for ((name, amount) in pdfAgreementCreditors) {
+                mergedMap[name] = amount
+            }
+            // PDF 채권사 한글명 캐시
+            val pdfNormalizedNames = mergedMap.keys.associate { it to normalizeCreditorName(it) }
+
+            // 한글파일 채권사 중 PDF에 없는 것만 추가 (한글변환 이름+금액 비교)
+            var overlappingAmount = 0  // HWP 채권사 중 PDF와 겹치는 금액
+            for ((name, amount) in parsedCreditorMap) {
+                val hwpNorm = normalizeCreditorName(name)
+                val matchedPdf = mergedMap.entries.firstOrNull { (pdfName, pdfAmt) ->
+                    val pdfNorm = pdfNormalizedNames[pdfName] ?: normalizeCreditorName(pdfName)
+                    // 앞 4글자 매칭
+                    (pdfNorm.contains(hwpNorm.take(4)) || hwpNorm.contains(pdfNorm.take(4)))
+                    // 앞 3글자 매칭 + 금액 유사 (OCR 오타 대응: 드림인자 vs 드림인진자)
+                    || (hwpNorm.length >= 3 && pdfNorm.length >= 3
+                        && (pdfNorm.contains(hwpNorm.take(3)) || hwpNorm.contains(pdfNorm.take(3)))
+                        && kotlin.math.abs(amount - pdfAmt) <= maxOf(pdfAmt, amount) * 0.3)
                 }
-                if (aiMatch && targetDebt >= otherAmount) {
-                    targetDebt -= otherAmount
-                    Log.d("HWP_CALC", "기타채무 대상채무 제외: ${otherName} ${otherAmount}만 → 대상채무 ${targetDebt}만")
+                if (matchedPdf == null) {
+                    mergedMap[name] = amount
+                    Log.d("HWP_CALC", "한글 추가 채권사 (PDF에 없음): $name ${amount}만 (변환=$hwpNorm)")
+                } else {
+                    val pdfAmt = matchedPdf.value
+                    val diff = kotlin.math.abs(amount - pdfAmt)
+                    if (diff > maxOf(pdfAmt, amount) * 0.3 && diff > 50) {
+                        mergedMap[name] = amount
+                        Log.d("HWP_CALC", "한글 추가 채권사 (금액 차이): $name ${amount}만 vs PDF ${matchedPdf.key} ${pdfAmt}만")
+                    } else {
+                        overlappingAmount += amount
+                        Log.d("HWP_CALC", "한글 채권사 스킵 (PDF에 있음): $name(${hwpNorm}) ${amount}만 ≈ ${matchedPdf.key} ${pdfAmt}만")
+                    }
                 }
             }
-        } else if (otherDebtEntries.isNotEmpty() && targetDebtOverridden) {
-            Log.d("HWP_CALC", "기타채무 차감 스킵: override 사용 (채무현황에 미포함)")
+            parsedCreditorMap.clear()
+            parsedCreditorMap.putAll(mergedMap)
+            Log.d("HWP_CALC", "채권사 병합: PDF ${pdfAgreementCreditors.size}건 + 한글추가 → 총 ${parsedCreditorMap.size}건")
+
+            // 합의서 대상채무 + 한글 대상채무 합산 (겹치는 금액 제외)
+            if (pdfAgreementDebt > 0) {
+                val hwpDebt = targetDebt
+                targetDebt = hwpDebt + pdfAgreementDebt - overlappingAmount
+                Log.d("HWP_PARSE", "합의서+한글 대상채무 합산: 한글=${hwpDebt}만 + 합의서=${pdfAgreementDebt}만 - 중복=${overlappingAmount}만 = ${targetDebt}만")
+            }
+        } else if (pdfAgreementDebt > 0) {
+            // PDF 채권사 목록 없이 대상채무만 있는 경우
+            val hwpDebt = targetDebt
+            targetDebt = pdfAgreementDebt + hwpDebt
+            Log.d("HWP_PARSE", "합의서+한글 대상채무 합산: 합의서=${pdfAgreementDebt}만 + 한글=${hwpDebt}만 = ${targetDebt}만")
         }
 
-        // 신청일자 이후 추가채무 → 대상채무에 합산
-        if (postApplicationDebtMan > 0) {
-            targetDebt += postApplicationDebtMan
-            Log.d("HWP_PARSE", "신청일자 이후 추가채무: +${postApplicationDebtMan}만 → 대상채무 ${targetDebt}만")
+        // 변제계획안 대상채무 적용 (있으면 우선)
+        if (pdfRecoveryDebt > 0 && pdfRecoveryDebt > targetDebt) {
+            Log.d("HWP_CALC", "변제계획안 대상채무 적용: 한글=${targetDebt}만 → 변제계획안=${pdfRecoveryDebt}만")
+            targetDebt = pdfRecoveryDebt
         }
+        // 변제계획안 월변제금은 단기 결과에서 직접 적용 (소득이 아님)
 
-        // 합의서 제외 채무 합산
-        if (pdfExcludedGuaranteeDebt > 0) {
-            targetDebt += pdfExcludedGuaranteeDebt
-            Log.d("HWP_PARSE", "합의서 제외 보증서담보대출 대상채무 합산: +${pdfExcludedGuaranteeDebt}만 → ${targetDebt}만")
+        // ★ 미협약 판단 (AffiliateList 대조) - 텍스트 파싱 기반
+        val loanTypeNames = setOf("신용대출", "신용", "카드", "카드대출", "담보", "담보대출", "대출", "기타", "기타대출", "총액", "국세", "지방세", "세금", "지급보증", "연대보증", "보증", "고소", "소송", "벌금", "물품대금")
+        val nonFinancialKeywords = listOf("물품대금", "세금", "국세", "지방세", "공사대금", "대금", "급여", "임금", "월세", "보증금")
+        val financialKeywords = listOf("은행", "카드", "캐피탈", "저축", "대부", "보험", "증권", "금융", "신협", "농협", "수협", "새마을", "조합", "재단", "보증", "자산관리", "추심", "생명", "화재", "손해", "상사", "할부", "여신", "리스", "펀드", "투자", "파이낸스", "캐시", "론", "크레디트", "신용정보", "상호", "공사", "에스비아이", "웰컴", "오케이", "페퍼", "제이티", "모아", "예스", "에이앤피")
+        var nonAffiliatedDebt = 0
+        val nonAffNames = mutableListOf<String>()
+        val nonAffEntries = mutableListOf<Pair<String, Int>>()
+        val otherDebtNameSet = otherDebtEntries.map { it.first }.toSet()
+        for ((name, amount) in parsedCreditorMap) {
+            if (loanTypeNames.contains(name)) {
+                Log.d("HWP_CALC", "대출유형명 (미협약 판단 제외): $name (${amount}만)")
+                continue
+            }
+            if (name in otherDebtNameSet) {
+                Log.d("HWP_CALC", "기타채무 (미협약 판단 제외): $name (${amount}만)")
+                continue
+            }
+            if (nonFinancialKeywords.any { name.contains(it) }) {
+                Log.d("HWP_CALC", "비금융채무 (미협약 판단 제외): $name (${amount}만)")
+                continue
+            }
+            val nameForCheck = if (name.contains("대부")) name.replace("대부", "") else name
+            if (!AffiliateList.isAffiliated(name) && !AffiliateList.isAffiliated(nameForCheck)) {
+                val isFinancial = financialKeywords.any { name.contains(it) }
+                if (!isFinancial) {
+                    Log.d("HWP_CALC", "비금융 채권사 (미협약 제외): $name (${amount}만)")
+                } else {
+                    nonAffiliatedDebt += amount
+                    nonAffNames.add(name)
+                    nonAffEntries.add(Pair(name, amount))
+                    Log.d("HWP_CALC", "미협약 채권사: $name (${amount}만)")
+                }
+            } else {
+                Log.d("HWP_CALC", "협약 채권사: $name (${amount}만)")
+            }
         }
-        if (pdfExcludedOtherDebt > 0) {
-            aiDamboDebt += pdfExcludedOtherDebt
-            Log.d("HWP_PARSE", "합의서 제외 기타 담보대출 합산: +${pdfExcludedOtherDebt}만 → ${aiDamboDebt}만")
-        }
+        Log.d("HWP_CALC", "미협약 채무 합계: ${nonAffiliatedDebt}만 (${parsedCreditorMap.size}개 채권사 중)")
+        // 미협약 → 대상채무에서 차감
+        if (nonAffiliatedDebt > targetDebt) nonAffiliatedDebt = targetDebt
+        targetDebt -= nonAffiliatedDebt
 
-        // 텍스트 파서 재산 vs AI 재산 비교 (차량은 AI에 포함, 텍스트에는 미포함 → 차량분 보정 후 비교)
-        val aiCarProperty = carInfoList.sumOf { maxOf(0, it[0] - it[1]) }
-        val aiPropertyWithoutCar = maxOf(netProperty - aiCarProperty, 0)
-        val parsedWithSpouse = parsedPropertyTotal + regionSpouseProperty
-        if (parsedPropertyTotal > 0 && parsedWithSpouse > aiPropertyWithoutCar) {
-            netProperty = parsedWithSpouse + aiCarProperty
-            Log.d("HWP_CALC", "텍스트 재산 > AI(차량제외): 텍스트${parsedPropertyTotal}만 + 배우자${regionSpouseProperty}만 + 차량${aiCarProperty}만 = ${netProperty}만 (AI차량제외=${aiPropertyWithoutCar}만)")
+        // ★ 과반 채권사 (parsedCreditorMap에서 담보/기타채무 제외 최대)
+        val majorEntry = parsedCreditorMap.entries
+            .filter { !parsedDamboCreditorNames.contains(it.key) }
+            .filter { it.key !in otherDebtNameSet }
+            .maxByOrNull { it.value }
+        val majorCreditorFromParsing = if (majorEntry != null && (targetDebt + nonAffiliatedDebt) > 0 &&
+            majorEntry.value.toDouble() / (targetDebt + nonAffiliatedDebt) > 0.5) majorEntry.key else ""
+        val majorCreditorDebtFromParsing = if (majorCreditorFromParsing.isNotEmpty()) majorEntry!!.value else 0
+
+        // ★ 채권사 수
+        val parsedCreditorCount = parsedCreditorMap.size
+        Log.d("HWP_CALC", "텍스트 파싱 채권사: ${parsedCreditorCount}건, 과반=${majorCreditorFromParsing}(${majorCreditorDebtFromParsing}만), 미협약=${nonAffiliatedDebt}만")
+
+        // ★ 재산: 텍스트 파싱 기반 (AI 제거)
+        val carPropertyValue = carInfoList.sumOf { maxOf(0, it[0] - it[1]) }
+        if (parsedPropertyTotal > 0 || regionSpouseProperty > 0 || carPropertyValue > 0) {
+            netProperty = parsedPropertyTotal + regionSpouseProperty + carPropertyValue
+            Log.d("HWP_CALC", "재산 (텍스트파싱): 부동산${parsedPropertyTotal}만 + 배우자${regionSpouseProperty}만 + 차량${carPropertyValue}만 = ${netProperty}만")
         }
 
         // 단기용 재산: 예적금 포함, 등본 분리 미적용
@@ -2424,33 +3224,15 @@ class MainActivity : AppCompatActivity() {
             Log.d("HWP_CALC", "예적금 제외(장기): 재산 $originalNetProperty → ${netProperty}만 (예적금 ${savingsDeposit}만)")
         }
 
-        // 등본 분리 시 재산 조정
-        val isRegistrySplit = if (regionIsSpouseOwned && regionSpouseProperty > 0) {
-            // 지역이 배우자명의 → 배우자명의 재산만 제외
-            netProperty = netProperty - regionSpouseProperty
-            if (netProperty < 0) netProperty = 0
-            Log.d("HWP_CALC", "등본 분리 적용(지역 배우자명의): 재산 → $netProperty (배우자명의 ${regionSpouseProperty}만 제외)")
-            true
-        } else if (!hasOwnRealEstate && hasOthersRealEstate && aiOthersProperty > 0) {
-            // 본인명의 없고 타인명의만 → 전체 타인명의 재산 제외
-            netProperty = netProperty - aiOthersProperty
-            if (netProperty < 0) netProperty = 0
-            Log.d("HWP_CALC", "등본 분리 적용(타인명의): 재산 → $netProperty (타인명의 ${aiOthersProperty}만 제외)")
-            true
-        } else false
-
-        // 분양권 재산 제외 (분양권 포기)
-        if (hasBunyangGwon && bunyangGwonNet > 0) {
-            netProperty = netProperty - bunyangGwonNet
-            if (netProperty < 0) netProperty = 0
-            Log.d("HWP_CALC", "분양권 포기 적용: 재산 → ${netProperty}만 (분양권 순가치 ${bunyangGwonNet}만 제외)")
+        // 분양권: 재산에 더하지 않음, 최종 진단에 멘트 삽입
+        if (hasBunyangGwon) {
+            Log.d("HWP_CALC", "분양권 보유: 순가치 ${bunyangGwonNet}만 (재산 미포함, 진단 멘트로 처리)")
         }
 
         // ★ 개별 차량 처분 판단 로직
         var needsCarDisposal = false
         var dispCarSise = 0
         var dispCarLoan = 0
-        var dispCarDeficit = 0  // 개별 차량별 부족분(대출>시세) 합계
         var carDisposalReasons = mutableListOf<String>()
 
         fun shouldDisposeCar(info: IntArray): Boolean {
@@ -2472,39 +3254,25 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (carInfoList.size >= 2) {
-            // 다수 차량: 1대 남기고 전부 처분
-            val nonConditionCars = carInfoList.filter { !shouldDisposeCar(it) }
+            // 다수 차량: 조건 해당 차량만 처분 (조건 미해당 차량은 보유)
+            val conditionCars = carInfoList.filter { shouldDisposeCar(it) }
 
-            if (nonConditionCars.isNotEmpty()) {
-                // 조건 미해당 차량이 있으면 → 월납부 가장 낮은 1대 남기고 나머지 전부 처분
-                val sortedNonCondition = nonConditionCars.sortedBy { it[2] }  // 월납부 오름차순
-                val keepCar = sortedNonCondition[0]  // 월납부 가장 낮은 차량 보유
-                for (info in carInfoList) {
-                    if (info === keepCar) continue  // 보유 차량 skip
+            if (conditionCars.isNotEmpty()) {
+                // 조건 해당 차량만 처분
+                for (info in conditionCars) {
                     dispCarSise += info[0]
                     dispCarLoan += info[1]
-                    if (info[1] > info[0]) dispCarDeficit += info[1] - info[0]  // 개별 부족분
-                    val reason = if (shouldDisposeCar(info)) getDisposalReason(info) else "다수차량(월납${info[2]}만)"
-                    carDisposalReasons.add(reason)
-                }
-                needsCarDisposal = true
-            } else {
-                // 모든 차량 조건 해당 → 전부 처분 (마지막 1대 포함)
-                for (info in carInfoList) {
-                    dispCarSise += info[0]
-                    dispCarLoan += info[1]
-                    if (info[1] > info[0]) dispCarDeficit += info[1] - info[0]  // 개별 부족분
                     carDisposalReasons.add(getDisposalReason(info))
                 }
                 needsCarDisposal = true
             }
+            // 조건 미해당 차량은 모두 보유 (처분 불필요)
         } else if (carInfoList.size == 1) {
             // 단일 차량: 조건 해당이면 처분
             val info = carInfoList[0]
             if (shouldDisposeCar(info)) {
                 dispCarSise = info[0]
                 dispCarLoan = info[1]
-                if (info[1] > info[0]) dispCarDeficit = info[1] - info[0]  // 개별 부족분
                 carDisposalReasons.add(getDisposalReason(info))
                 needsCarDisposal = true
             }
@@ -2526,27 +3294,20 @@ class MainActivity : AppCompatActivity() {
 
         // ★ 6개월 이내 채무: 표에서 파싱한 값만 사용
         val recentDebtMan = recentDebtEntries.sumOf { (it.second + 5) / 10 }
-        // 차량 처분 시 개별 차량별 부족분(대출>시세) → 대상채무에 추가
-        val carDebtDeficit = dispCarDeficit
         val targetDebtBeforeDisposal = targetDebt
-        if ((needsCarDisposal || wantsCarSale) && carDebtDeficit > 0) {
-            targetDebt += carDebtDeficit
-            Log.d("HWP_CALC", "차량 처분 → 대상채무 추가 (개별부족분=${carDebtDeficit}만): 대상채무=${targetDebt}만")
-            carTotalLoan = carTotalSise  // 부족분은 대상채무에 반영됨, 하류 중복 방지
-        }
 
         // 6개월 비율: 6개월 이내 채무 / 전체 채무 (처분 전 대상채무 + 담보대출)
-        val totalDebtForRatio = maxOf(totalParsedDebt, targetDebtBeforeDisposal + maxOf(aiDamboDebt, parsedDamboTotal))
+        val totalDebtForRatio = maxOf(totalParsedDebt, targetDebtBeforeDisposal + parsedDamboTotal)
         recentDebtRatio = if (totalDebtForRatio > 0 && recentDebtMan > 0) recentDebtMan.toDouble() / totalDebtForRatio * 100 else 0.0
 
         // ★ 미협약 비율: 처분 반영된 대상채무 + 미협약 포함 기준
         val originalTargetDebt = targetDebt
         val nonAffiliatedOver20: Boolean
         if (nonAffiliatedDebt > 0) {
-            val totalDebtAll = targetDebt + nonAffiliatedDebt + maxOf(aiDamboDebt, parsedDamboTotal)
+            val totalDebtAll = targetDebt + nonAffiliatedDebt + parsedDamboTotal
             val nonAffiliatedRatio = if (totalDebtAll > 0) nonAffiliatedDebt.toDouble() / totalDebtAll * 100 else 0.0
             nonAffiliatedOver20 = nonAffiliatedRatio >= 20
-            val nonAffNamesStr = if (aiNonAffiliatedNames.isNotEmpty()) aiNonAffiliatedNames.joinToString(",") else ""
+            val nonAffNamesStr = if (nonAffNames.isNotEmpty()) nonAffNames.joinToString(",") else ""
             if (nonAffiliatedOver20) {
                 specialNotesList.add("미협약 ${String.format("%.0f", nonAffiliatedRatio)}% (신복위 불가) $nonAffNamesStr".trim())
             } else {
@@ -2558,30 +3319,23 @@ class MainActivity : AppCompatActivity() {
         }
 
         Log.d("HWP_CALC", "6개월 비율: ${recentDebtMan}만 / ${totalDebtForRatio}만 = ${String.format("%.1f", recentDebtRatio)}%")
-        // "월 소득 x" 감지 시 AI 소득 강제 0 (AI 할루시네이션 방지)
-        if (isIncomeX && income > 0) {
-            Log.d("HWP_CALC", "HWP '소득 x' 감지 → AI 소득 ${income}만 → 0으로 강제")
+        // ★ 소득: 텍스트 파싱 기반 (AI 제거)
+        if (isIncomeX) {
             income = 0
-        }
-        // HWP에서 예정/예상 소득이 파싱되었고 AI 소득이 0이면 적용
-        if (income <= 0 && estimatedIncomeParsed > 0) {
+            Log.d("HWP_CALC", "소득 (텍스트파싱): '소득 x' 감지 → 0만")
+        } else if (parsedMonthlyIncome > 0) {
+            income = parsedMonthlyIncome
+            Log.d("HWP_CALC", "소득 (텍스트파싱): ${parsedMonthlyIncome}만")
+        } else if (estimatedIncomeParsed > 0) {
             income = estimatedIncomeParsed
             isIncomeEstimated = true
-            Log.d("HWP_CALC", "AI 소득 0 → HWP 예정 소득 적용: ${estimatedIncomeParsed}만")
+            Log.d("HWP_CALC", "소득 (텍스트파싱 예정): ${estimatedIncomeParsed}만")
         }
-        // HWP "월 소득 N만" 직접 파싱값이 AI보다 크면 적용 (연금 등 추가소득 반영)
-        if (parsedMonthlyIncome > income) {
-            Log.d("HWP_CALC", "HWP 파싱 소득 > AI 소득: ${parsedMonthlyIncome}만 > ${income}만 → 파싱값 적용")
-            income = parsedMonthlyIncome
-        } else if (income <= 0 && parsedMonthlyIncome > 0) {
-            income = parsedMonthlyIncome
-            Log.d("HWP_CALC", "AI 소득 0 → HWP 월소득 파싱 적용: ${parsedMonthlyIncome}만")
-        }
-        Log.d("HWP_CALC", "AI값: 소득=$income, 대상채무=$targetDebt, 재산=$netProperty")
+        Log.d("HWP_CALC", "계산값: 소득=$income, 대상채무=$targetDebt, 재산=$netProperty")
 
         // 채무 한도 체크 (만원 기준)
         val totalUnsecuredDebt = originalTargetDebt + nonAffiliatedDebt  // 담보가 아닌 채무
-        val totalSecuredDebt = maxOf(aiDamboDebt, parsedDamboTotal)      // 담보채무
+        val totalSecuredDebt = parsedDamboTotal      // 담보채무
         val shortTermDebtOverLimit = totalUnsecuredDebt > 100000 || totalSecuredDebt > 150000  // 단순(회생): 무담보10억/담보15억
         val longTermDebtOverLimit = totalUnsecuredDebt > 50000 || totalSecuredDebt > 100000    // 장기(신복위): 무담보5억/담보10억
         if (shortTermDebtOverLimit) Log.d("HWP_CALC", "단순(회생) 채무한도 초과: 무담보=${totalUnsecuredDebt}만, 담보=${totalSecuredDebt}만")
@@ -2609,43 +3363,34 @@ class MainActivity : AppCompatActivity() {
         }
 
         // ★ 과반 비율: 미협약 포함 전체 채무 기준으로 계산
-        // 대출과목 요약 카테고리(신복위, 신복, 신용, 카드, 담보)는 실제 채권사가 아니므로 과반 판단 제외
         val majorExcluded = setOf("신복위", "신복", "신용", "카드", "담보", "신용회복위원회")
-        // AI 과반 채권사가 담보로 제외된 경우 → 비담보 채권사 중 최대로 재계산
-        var effectiveMajorCreditor = majorCreditorFromAI
-        var effectiveMajorDebt = majorCreditorDebtFromAI
-        val isMajorDambo = parsedDamboCreditorNames.any { it.contains(majorCreditorFromAI) || majorCreditorFromAI.contains(it) }
-        if (isMajorDambo && aiCreditorList.isNotEmpty()) {
-            val nonDamboCreditors = aiCreditorList.filter { cr ->
-                !cr.isCard && !parsedDamboCreditorNames.any { d -> cr.name.contains(d) || d.contains(cr.name) }
-            }
-            val biggest = nonDamboCreditors.maxByOrNull { it.amount }
-            if (biggest != null) {
-                effectiveMajorCreditor = biggest.name
-                effectiveMajorDebt = biggest.amount
-                Log.d("HWP_CALC", "과반 채권사 변경: ${majorCreditorFromAI}(담보) → ${effectiveMajorCreditor}(${effectiveMajorDebt}만)")
-            }
-        }
+        var effectiveMajorCreditor = majorCreditorFromParsing
+        var effectiveMajorDebt = majorCreditorDebtFromParsing
         majorCreditorRatio = if (originalTargetDebt > 0 && effectiveMajorDebt > 0 && effectiveMajorCreditor !in majorExcluded) effectiveMajorDebt.toDouble() / originalTargetDebt * 100 else 0.0
 
-        // 변제율 결정
-        var repaymentRate = 90
+        // 변제율 결정 (기본 85% = 15%탕감)
+        var repaymentRate = 85
         var rateReason = ""
-        // 과반 채권사 → 100%
-        if (majorCreditorRatio >= 50) {
+        val guaranteeDaebuTotal = guaranteeDebtMan + daebuDebtMan
+        val guaranteeDaebuRatio = if (originalTargetDebt > 0) guaranteeDaebuTotal.toDouble() / originalTargetDebt * 100 else 0.0
+        val cardCapitalRatio = if (originalTargetDebt > 0) cardCapitalDebtMan.toDouble() / originalTargetDebt * 100 else 0.0
+        // 100%: 채무 4000만 이하
+        if (originalTargetDebt <= 4000 && originalTargetDebt > 0) {
+            repaymentRate = 100; rateReason = "소액"
+        }
+        // 100%: 1개 채권사 50% 이상
+        else if (majorCreditorRatio >= 50) {
             repaymentRate = 100; rateReason = "과반"
         }
-        // 100%: 6개월 신규비율 80% 이상
-        else if (recentDebtRatio >= 80) {
-            repaymentRate = 100; rateReason = "6개월비율 80%+"
+        // 100%: 지급보증+대부 합계 50% 초과
+        else if (guaranteeDaebuRatio > 50) {
+            repaymentRate = 100; rateReason = "지급보증/대부 과반"
         }
-        // 95%: 투기성 사용 OR 6개월 신규비율 80% 직전 (70~80 미만)
-        else if (hasGambling || hasStock || hasCrypto) {
-            repaymentRate = 95
-            rateReason = when { hasGambling -> "도박"; hasStock -> "주식"; else -> "코인" }
-        } else if (recentDebtRatio >= 70) {
-            repaymentRate = 95; rateReason = "6개월비율 고위험"
+        // 80%: 대상채무 1억 이상 & 카드/캐피탈 50% 이상 (20%탕감)
+        else if (originalTargetDebt >= 10000 && cardCapitalRatio >= 50) {
+            repaymentRate = 80; rateReason = "카드/캐피탈 과반"
         }
+        Log.d("HWP_CALC", "변제율: ${repaymentRate}% (${rateReason.ifEmpty { "기본15%탕감" }}), 지급보증+대부=${guaranteeDaebuTotal}만(${String.format("%.1f", guaranteeDaebuRatio)}%), 카드캐피탈=${cardCapitalDebtMan}만(${String.format("%.1f", cardCapitalRatio)}%)")
 
         // ★ 이혼 + 양육비 지급 (비수급) → 본인이 양육하지 않으므로 미성년 부양 인정 불가
         val childSupportDeduction: Int  // 단기 양육비 공제액
@@ -2677,11 +3422,9 @@ class MainActivity : AppCompatActivity() {
                         ((currentYear - dischargeYear) == 5 && dischargeMonth == 0)
                 )
 
-        // 텍스트에서 파싱한 세금채무 병합 (AI 값이 없을 때)
-        if (taxDebt == 0 && textTaxDebt > 0) {
-            taxDebt = textTaxDebt
-            Log.d("HWP_CALC", "세금채무 텍스트 파싱 사용: ${taxDebt}만")
-        }
+        // ★ 세금: 텍스트 파싱 (AI 미사용)
+        taxDebt = textTaxDebt
+        if (taxDebt > 0) Log.d("HWP_CALC", "세금 (텍스트파싱): ${taxDebt}만")
         // 단기(회생)는 세금 포함
         val shortTermDebt = targetDebt + taxDebt
         if (taxDebt > 0) Log.d("HWP_CALC", "단기 대상채무: $targetDebt + 세금$taxDebt = ${shortTermDebt}만")
@@ -2716,7 +3459,7 @@ class MainActivity : AppCompatActivity() {
                     var stMonths = Math.round(debtAfterCarSale.toDouble() / stMonthlyAdj).toInt()
                     if (stMonths > 60) stMonths = 60
                     if (stMonths < 1) stMonths = 1
-                    val roundedSt = ((stMonthlyAdj + 2) / 5) * 5
+                    val roundedSt = stMonthlyAdj
                     val minYears = Math.ceil(stMonths / 12.0).toInt()
                     val maxYears = Math.ceil(60 / 12.0).toInt()
                     shortTermAfterCarSale = "${roundedSt}만 ${minYears}~${maxYears}년납"
@@ -2725,7 +3468,7 @@ class MainActivity : AppCompatActivity() {
                 } else if (income <= livingCostTable[1] && debtAfterCarSale > propertyAfterCarSale) {
                     // 소득 < 1인 생계비 → (대상-재산)÷36
                     val stByDebt = Math.ceil((debtAfterCarSale - propertyAfterCarSale).toDouble() / 36).toInt()
-                    val roundedSt = ((stByDebt + 2) / 5) * 5
+                    val roundedSt = stByDebt
                     shortTermAfterCarSale = "${roundedSt}만 3~5년납"
                     shortTermCarSaleApplied = true
                     Log.d("HWP_CALC", "차량 처분시 단기(소득<1인생계비): ($debtAfterCarSale-$propertyAfterCarSale)÷36=$stByDebt → ${roundedSt}만")
@@ -2747,7 +3490,8 @@ class MainActivity : AppCompatActivity() {
         var shortTermMonths = 0
         var shortTermResult = ""
 
-        if (shortTermBlocked) {
+        val shortTermHardBlocked = dischargeWithin5Years || (originalNetProperty > shortTermDebt && shortTermDebt > 0)
+        if (shortTermBlocked && shortTermHardBlocked) {
             shortTermResult = "단기 불가 ($shortTermBlockReason)"
         } else if (income <= 100) {
             shortTermResult = "단기 불가 (소득부족)"
@@ -2771,7 +3515,7 @@ class MainActivity : AppCompatActivity() {
                     shortTermMonths = 60
                 }
             }
-            val roundedShortTerm = ((shortTermMonthly + 2) / 5) * 5
+            val roundedShortTerm = shortTermMonthly
             shortTermResult = "${roundedShortTerm}만 / ${shortTermMonths}개월납"
             Log.d("HWP_CALC", "단기 40만 기준: 재산=${originalNetProperty}만, 월=${roundedShortTerm}만, ${shortTermMonths}개월")
         } else {
@@ -2779,26 +3523,42 @@ class MainActivity : AppCompatActivity() {
             shortTermMonths = Math.round(shortTermDebt.toDouble() / shortTermMonthly).toInt()
             if (shortTermMonths > 60) shortTermMonths = 60
             if (shortTermMonths < 1) shortTermMonths = 1
-            val roundedShortTerm = ((shortTermMonthly + 2) / 5) * 5
+            val roundedShortTerm = shortTermMonthly
             shortTermResult = "${roundedShortTerm}만 / ${shortTermMonths}개월납"
+        }
+        // 면책/재산초과 외 불가사유 → 계산 결과 + 사유 별도 표시
+        if (shortTermBlocked && !shortTermHardBlocked && shortTermBlockReason.isNotEmpty() && !shortTermResult.contains("불가")) {
+            shortTermResult = "$shortTermResult ($shortTermBlockReason)"
         }
         // 본인명의 집 또는 배우자 공동명의 집 → 집경매 위험 (재산초과 여부와 무관)
         if ((hasOwnRealEstate || hasSpouseCoOwned) && shortTermDebt > 0) {
             shortTermBlocked = true
             if (shortTermBlockReason.isNotEmpty()) shortTermBlockReason += ", "
             shortTermBlockReason += "집경매 위험"
-            shortTermResult = "단기 불가 ($shortTermBlockReason)"
+            if (shortTermHardBlocked) {
+                shortTermResult = "단기 불가 ($shortTermBlockReason)"
+            } else {
+                if (!shortTermResult.contains("집경매")) shortTermResult = "$shortTermResult (집경매 위험)"
+            }
+        }
+
+        // 변제계획안 존재 시 단기 결과 오버라이드 (이미 진행 중인 회생)
+        if (aiHasRecoveryPlan && pdfRecoveryIncome > 0) {
+            shortTermMonthly = pdfRecoveryIncome
+            shortTermMonths = if (pdfRecoveryMonths > 0) pdfRecoveryMonths else 36
+            shortTermResult = "${pdfRecoveryIncome}만 / ${shortTermMonths}개월납"
+            shortTermBlocked = false
+            Log.d("HWP_CALC", "변제계획안 단기 오버라이드: ${pdfRecoveryIncome}만 / ${shortTermMonths}개월납")
         }
 
         // 학자금대출: 단기는 포함, 장기는 제외 → 단기 계산 후 대상채무에서 차감
-        // AI가 이미 학자금 채권사를 제외한 경우 이중 차감 방지
-        val aiIncludesStudentLoan = aiCreditorNames.any { it.contains("장학재단") || it.contains("학자금") }
-        if (studentLoanMan > 0 && aiIncludesStudentLoan) {
+        val parsedIncludesStudentLoan = parsedCreditorMap.keys.any { it.contains("장학재단") || it.contains("학자금") }
+        if (studentLoanMan > 0 && parsedIncludesStudentLoan) {
             targetDebt -= studentLoanMan
             if (targetDebt < 0) targetDebt = 0
             Log.d("HWP_CALC", "학자금 제외 (장기용): ${studentLoanMan}만 차감 → 대상채무=${targetDebt}만")
         } else if (studentLoanMan > 0) {
-            Log.d("HWP_CALC", "학자금 차감 스킵: AI가 이미 학자금 제외 (${studentLoanMan}만, AI채권사에 장학재단/학자금 없음)")
+            Log.d("HWP_CALC", "학자금 차감 스킵: 파싱에서 학자금 미포함 (${studentLoanMan}만)")
         }
 
         // 공제기준가액
@@ -2845,8 +3605,28 @@ class MainActivity : AppCompatActivity() {
 
         var netPropertyAfterExemption = netProperty - exemptionAmount
         if (netPropertyAfterExemption < 0) netPropertyAfterExemption = 0
-        val longTermPropertyExcess = netPropertyAfterExemption > targetDebt && targetDebt > 0
+        var longTermPropertyExcess = netPropertyAfterExemption > targetDebt && targetDebt > 0
         Log.d("HWP_CALC", "장기 재산초과 판단: ($netProperty - $exemptionAmount) = $netPropertyAfterExemption > $targetDebt → $longTermPropertyExcess")
+
+        // 등본 분리: 재산초과이면서 배우자명의 시세가 있을 때만 적용
+        val isRegistrySplit = if (longTermPropertyExcess && regionIsSpouseOwned && regionSpouseProperty > 0) {
+            // 지역이 배우자명의 + 재산초과 → 배우자명의 재산 + 재산필드 타인명의 모두 제외
+            netProperty = netProperty - regionSpouseProperty - parsedOthersProperty
+            if (netProperty < 0) netProperty = 0
+            netPropertyAfterExemption = maxOf(netProperty - exemptionAmount, 0)
+            longTermPropertyExcess = netPropertyAfterExemption > targetDebt
+            Log.d("HWP_CALC", "등본 분리 적용(배우자명의 + 재산초과): 재산 → $netProperty (배우자${regionSpouseProperty}만 + 타인${parsedOthersProperty}만 제외), 재산초과=$longTermPropertyExcess")
+            true
+        } else if (longTermPropertyExcess && !hasOwnRealEstate && hasOthersRealEstate && parsedOthersProperty > 0) {
+            // 본인명의 없고 타인명의만 + 재산초과 → 전체 타인명의 재산 제외
+            netProperty = netProperty - parsedOthersProperty
+            if (netProperty < 0) netProperty = 0
+            netPropertyAfterExemption = maxOf(netProperty - exemptionAmount, 0)
+            longTermPropertyExcess = netPropertyAfterExemption > targetDebt
+            Log.d("HWP_CALC", "등본 분리 적용(타인명의 + 재산초과): 재산 → $netProperty (타인${parsedOthersProperty}만 제외), 재산초과=$longTermPropertyExcess")
+            true
+        } else false
+
         val longTermCarBlocked = carTotalSise >= 1000 || carCount >= 2 || carMonthlyPayment >= 50
         if (longTermCarBlocked) Log.d("HWP_CALC", "장기 차량 불가: 시세=${carTotalSise}만, ${carCount}대, 월납=${carMonthlyPayment}만")
         // 차량에 잔여가치 없으면 (시세-담보<=0) 장기 차량 불가 무시 (특이에만 표시)
@@ -2867,20 +3647,20 @@ class MainActivity : AppCompatActivity() {
             val step2 = income - livingCostShinbok                    // 2단계: 부모 제외
 
             longTermMonthly = when {
-                // 1단계: 소득-생계비-부모 ≥ 40
-                step1 >= 40 -> {
+                // 1단계: 소득-생계비-부모 ≥ 45
+                step1 >= 45 -> {
                     Log.d("HWP_CALC", "장기 1단계: 소득-생계비-부모=$step1")
                     step1
                 }
-                // 2단계: 부모 제외, 소득-생계비 ≥ 40
-                step2 >= 40 -> {
+                // 2단계: 부모 제외, 소득-생계비 ≥ 45
+                step2 >= 45 -> {
                     Log.d("HWP_CALC", "장기 2단계: 부모 제외, 소득-생계비=$step2")
                     step2
                 }
-                // 3단계: 40만 고정
+                // 3단계: 45만 고정
                 else -> {
-                    Log.d("HWP_CALC", "장기 3단계: 최소 40만 적용")
-                    40
+                    Log.d("HWP_CALC", "장기 3단계: 최소 45만 적용")
+                    45
                 }
             }
 
@@ -2894,27 +3674,34 @@ class MainActivity : AppCompatActivity() {
 
         }
 
-        var roundedLongTermMonthly = ((longTermMonthly + 2) / 5) * 5
+        var roundedLongTermMonthly = longTermMonthly
 
         // 보수 년수: 총변제금 ÷ 월변제금 ÷ 12 (소수점 .35 기준 반올림, 최소 1년, 최대 10년)
         if (roundedLongTermMonthly > 0) {
             val exactYears = totalPayment.toDouble() / roundedLongTermMonthly / 12.0
             longTermYears = if (exactYears - Math.floor(exactYears) >= 0.35) Math.ceil(exactYears).toInt() else Math.floor(exactYears).toInt()
             longTermYears = longTermYears.coerceIn(1, 10)
+            // 월변제금 × 기간이 총변제금 초과 시 기간 축소 후 월변제금 재계산
+            val maxYears = (totalPayment.toDouble() / (roundedLongTermMonthly * 12)).toInt().coerceAtLeast(1)
+            if (longTermYears > maxYears) {
+                longTermYears = maxYears
+                roundedLongTermMonthly = totalPayment / (longTermYears * 12)
+                longTermMonthly = roundedLongTermMonthly
+            }
         }
         Log.d("HWP_CALC", "장기 보수: 총변제금=$totalPayment, 월변제금=$roundedLongTermMonthly, ${longTermYears}년")
 
         // 프리랜서: 기간 6년 고정, 월변제금 = 총변제금/72, 40만 이하면 40만 기준으로 기간 재계산
         if (isFreelancer && targetDebt > 0 && totalPayment > 0) {
             val freelancerMonthly = Math.ceil(totalPayment.toDouble() / 72).toInt()
-            val roundedFreelancer = ((freelancerMonthly + 2) / 5) * 5
-            if (roundedFreelancer <= 40) {
-                roundedLongTermMonthly = 40
-                longTermMonthly = 40
-                val exactYears = totalPayment.toDouble() / 40 / 12.0
+            val roundedFreelancer = freelancerMonthly
+            if (roundedFreelancer <= 45) {
+                roundedLongTermMonthly = 45
+                longTermMonthly = 45
+                val exactYears = totalPayment.toDouble() / 45 / 12.0
                 longTermYears = if (exactYears - Math.floor(exactYears) >= 0.35) Math.ceil(exactYears).toInt() else Math.floor(exactYears).toInt()
                 longTermYears = longTermYears.coerceIn(3, 10)
-                Log.d("HWP_CALC", "프리랜서 장기: 변제금 40만 고정 → ${longTermYears}년")
+                Log.d("HWP_CALC", "프리랜서 장기: 변제금 45만 고정 → ${longTermYears}년")
             } else {
                 roundedLongTermMonthly = roundedFreelancer
                 longTermMonthly = freelancerMonthly
@@ -2925,14 +3712,14 @@ class MainActivity : AppCompatActivity() {
 
         // 소득 기반 변제금으로 1년 이내 완납 가능 → 100% 변제, 최소 3년
         if (roundedLongTermMonthly > 0 && totalPayment < roundedLongTermMonthly * 12) {
-            roundedLongTermMonthly = ((Math.ceil(targetDebt.toDouble() / 36).toInt() + 2) / 5) * 5
+            roundedLongTermMonthly = Math.ceil(targetDebt.toDouble() / 36).toInt()
             longTermYears = 3
             Log.d("HWP_CALC", "장기 1년 미만 → 100% 변제: ${roundedLongTermMonthly}만 / 3년납")
         }
 
-        // 장기 채무 부족: 월변제금 < 40만이면 채무가 너무 적어 장기(신복위) 불가
-        val longTermDebtInsufficient = roundedLongTermMonthly in 1 until 40
-        if (longTermDebtInsufficient) Log.d("HWP_CALC", "장기 채무 부족: 월변제금=${roundedLongTermMonthly}만 < 40만")
+        // 장기 채무 부족: 월변제금 < 45만이면 채무가 너무 적어 장기(신복위) 불가
+        val longTermDebtInsufficient = roundedLongTermMonthly in 1 until 45
+        if (longTermDebtInsufficient) Log.d("HWP_CALC", "장기 채무 부족: 월변제금=${roundedLongTermMonthly}만 < 45만")
 
         // 방생 판단은 공격 계산 후에
 
@@ -2942,14 +3729,14 @@ class MainActivity : AppCompatActivity() {
 
         if (targetDebt > 0 && roundedLongTermMonthly > 0) {
             val aggressiveMonthly = Math.ceil(roundedLongTermMonthly * 2.0 / 3.0).toInt()
-            roundedAggressiveMonthly = ((aggressiveMonthly + 2) / 5) * 5
-            if (roundedAggressiveMonthly < 40) roundedAggressiveMonthly = roundedLongTermMonthly
+            roundedAggressiveMonthly = aggressiveMonthly
+            if (roundedAggressiveMonthly < 45) roundedAggressiveMonthly = roundedLongTermMonthly
 
             // 공격 년수: 총변제금 ÷ 공격 월변제금 ÷ 12
             aggressiveYears = Math.ceil(totalPayment.toDouble() / roundedAggressiveMonthly / 12.0).toInt()
             if (aggressiveYears > 10) {
                 // 10년 초과 시: 총변제금 ÷ 120 = 공격 월변제금
-                roundedAggressiveMonthly = ((Math.ceil(totalPayment.toDouble() / 120).toInt() + 2) / 5) * 5
+                roundedAggressiveMonthly = Math.ceil(totalPayment.toDouble() / 120).toInt()
                 aggressiveYears = 10
                 Log.d("HWP_CALC", "장기 공격 10년 초과 → 총변제금÷120=${roundedAggressiveMonthly}만/10년")
             }
@@ -2974,9 +3761,11 @@ class MainActivity : AppCompatActivity() {
         Log.d("HWP_CALC", "새새 조건: 사업이력=$hasBusinessHistory(AI), 실제연체=${actualDelinquentDays}일(전체=${delinquentDays}일), 프리랜서=$isFreelancer, 사업자=$isBusinessOwner, 비영리=$isNonProfit, 법인=$isCorporateBusiness, 개업=${businessStartYear}년${if (businessStartMonth > 0) "${businessStartMonth}월" else ""}, 폐업=$businessEndYear, 채무한도초과=$saeDebtOverLimit(담보=${totalSecuredDebt}만,무담보=${totalUnsecuredDebt}만)")
         var saeTotalPayment = 0; var saeMonthly = 0; var saeYears = 0
         if (canApplySae && targetDebt > 0) {
-            saeTotalPayment = targetDebt - ((targetDebt - netProperty) * 0.35).toInt()
-            if (saeTotalPayment >= targetDebt) saeTotalPayment = targetDebt
-            saeTotalPayment = ((saeTotalPayment + 2) / 5) * 5
+            saeTotalPayment = if (netProperty > targetDebt / 2) {
+                targetDebt - ((targetDebt - netProperty) * 0.6).toInt()
+            } else {
+                (targetDebt * 0.7).toInt()
+            }
             // 소득/대상채무 비율로 기간 결정
             val incomeRatio = income.toDouble() / targetDebt * 100
             saeYears = when {
@@ -2984,7 +3773,7 @@ class MainActivity : AppCompatActivity() {
                 incomeRatio > 3 -> 8
                 else -> 10
             }
-            saeMonthly = ((Math.ceil(saeTotalPayment.toDouble() / (saeYears * 12)).toInt() + 2) / 5) * 5
+            saeMonthly = saeTotalPayment / (saeYears * 12)
             if (saeMonthly <= 40) {
                 saeMonthly = 40
                 val exactYears = saeTotalPayment.toDouble() / 40 / 12.0
@@ -3008,27 +3797,24 @@ class MainActivity : AppCompatActivity() {
         if (isFreelancer) specialNotesList.add("프리랜서")
 
         // 과반 채권사 (미협약 채권은 과반 표시 제외)
-        val isMajorCreditorNonAffiliated = aiNonAffiliatedNames.any { effectiveMajorCreditor.contains(it) || it.contains(effectiveMajorCreditor) }
+        val isMajorCreditorNonAffiliated = nonAffNames.any { effectiveMajorCreditor.contains(it) || it.contains(effectiveMajorCreditor) }
         if (originalTargetDebt > 0 && effectiveMajorCreditor.isNotEmpty() && majorCreditorRatio > 50 && !isMajorCreditorNonAffiliated) {
             specialNotesList.add("$effectiveMajorCreditor 과반 (${String.format("%.0f", majorCreditorRatio)}%)")
             Log.d("HWP_CALC", "과반 채권사 (AI): $effectiveMajorCreditor ${effectiveMajorDebt}만 / ${originalTargetDebt}만 = ${String.format("%.1f", majorCreditorRatio)}%")
         }
         specialNotesList.add("6개월 이내 ${String.format("%.0f", recentDebtRatio)}%")
         if (needsCarDisposal) {
-            val reasonStr = carDisposalReasons.joinToString(", ")
-            specialNotesList.add("차량 처분 필요 ($reasonStr)")
+            val dispMonthly = carInfoList.filter { shouldDisposeCar(it) }.sumOf { it[2] }
+            specialNotesList.add("장기 시 차량처분 필요(시세${dispCarSise}만 / 담보${dispCarLoan}만 / 월납부${dispMonthly}만)")
         } else if (longTermCarBlocked && !longTermCarBlockedEffective) {
-            // 시세/담보 정보 없이 월납만으로 장기 차량 조건 해당 → 특이에 표시
-            val reasons = buildList {
-                if (carTotalSise >= 1000) add("시세${carTotalSise}만")
-                if (carCount >= 2) add("${carCount}대")
-                if (carMonthlyPayment >= 50) add("월 ${carMonthlyPayment}만")
-            }.joinToString(", ")
-            specialNotesList.add("차량 처분 필요 ($reasons)")
+            specialNotesList.add("장기 시 차량처분 필요(시세${carTotalSise}만 / 담보${carTotalLoan}만 / 월납부${carMonthlyPayment}만)")
+        }
+        if (hasJointCar && !needsCarDisposal && !(longTermCarBlocked && !longTermCarBlockedEffective)) {
+            specialNotesList.add("장기 시 차량처분 필요")
         }
         if (carCount >= 2) specialNotesList.add("차량 ${carCount}대 보유")
         // 사업자이력 년도 정보 추가 (새출발 가능기간 내 사업이력만 표시, 법인사업은 제외)
-        val hasBizHistory = hasBusinessHistory && !isCorporateBusiness
+        val hasBizHistory = hasBusinessHistory && !isCorporateBusiness && !isNonProfit
         if (hasBizHistory && !specialNotesList.any { it.contains("사업자") || it.contains("자영업") || it.contains("폐업") }) {
             val bizNote = if (businessStartYear > 0) {
                 if (businessEndYear > 0 && businessEndYear < java.time.LocalDate.now().year) {
@@ -3064,6 +3850,7 @@ class MainActivity : AppCompatActivity() {
         if (hasAuction) specialNotesList.add("경매진행중")
         if (hasSeizure) specialNotesList.add("압류진행중")
         if (delinquentDays >= 90) specialNotesList.add("장기연체자")
+        if (rateReason == "지급보증/대부 과반") specialNotesList.add("지급보증/대부 과반")
         if (hasCivilCase) specialNotesList.add("민사 소송금 따로 변제")
         if (hasUsedCarInstallment) specialNotesList.add("중고차 할부 따로 납부")
         if (hasHealthInsuranceDebt) specialNotesList.add("건강보험 체납 따로 변제")
@@ -3146,7 +3933,7 @@ class MainActivity : AppCompatActivity() {
             isBangsaeng = true; bangsaengReason = "채무한도초과"
         }
 
-        var shortTermTotal = if (!shortTermBlocked && shortTermMonthly > 0) ((shortTermMonthly + 2) / 5) * 5 * shortTermMonths else 0
+        var shortTermTotal = if (!shortTermBlocked && shortTermMonthly > 0) shortTermMonthly * shortTermMonths else 0
         // 차량 처분 시 단기 총액
         if (shortTermCarSaleApplied) {
             val debtAfterCar = targetDebt
@@ -3155,17 +3942,17 @@ class MainActivity : AppCompatActivity() {
             val stAdj = if (stMonthly <= 0 && income > livingCostTable[1]) income - livingCostTable[1] else stMonthly
             if (stAdj > 0) {
                 var stMonths = Math.round(debtAfterCar.toDouble() / stAdj).toInt().coerceIn(1, 60)
-                shortTermTotal = ((stAdj + 2) / 5) * 5 * stMonths
+                shortTermTotal = stAdj * stMonths
             } else if (income <= livingCostTable[1] && debtAfterCar > propAfterCar) {
                 val stByDebt = Math.ceil((debtAfterCar - propAfterCar).toDouble() / 36).toInt()
-                val roundedSt = ((stByDebt + 2) / 5) * 5
+                val roundedSt = stByDebt
                 shortTermTotal = roundedSt * 36
             }
         }
         // 청산가치 보장: 단기 총 변제금 < 재산이면 재산÷60 = 단기 월 변제금
         if (!shortTermBlocked && originalNetProperty > 0 && shortTermTotal > 0 && shortTermTotal < originalNetProperty) {
             val liquidationMonthly = Math.ceil(originalNetProperty.toDouble() / 60).toInt()
-            val roundedLiquidation = ((liquidationMonthly + 2) / 5) * 5
+            val roundedLiquidation = liquidationMonthly
             shortTermMonthly = roundedLiquidation
             shortTermMonths = 60
             shortTermTotal = roundedLiquidation * 60
@@ -3186,40 +3973,51 @@ class MainActivity : AppCompatActivity() {
             val csStep1 = income - livingCostShinbok - parentDeduction
             val csStep2 = income - livingCostShinbok
             var csMonthly = when {
-                csStep1 >= 40 -> csStep1
-                csStep2 >= 40 -> csStep2
-                else -> 40
+                csStep1 >= 45 -> csStep1
+                csStep2 >= 45 -> csStep2
+                else -> 45
             }
-            if (csMonthly == 40) {
-                val csStep3Years = Math.ceil(csTotalPayment.toDouble() / 40 / 12.0).toInt()
+            if (csMonthly == 45) {
+                val csStep3Years = Math.ceil(csTotalPayment.toDouble() / 45 / 12.0).toInt()
                 if (csStep3Years > 10) {
                     csMonthly = Math.ceil(csTotalPayment.toDouble() / 120).toInt()
                 }
             }
-            val csRounded = ((csMonthly + 2) / 5) * 5
+            val csRounded = csMonthly
             val csYears = if (csRounded > 0) Math.floor(csTotalPayment.toDouble() / csRounded / 12.0).toInt().coerceIn(1, 10) else 10
             carSaleLongTermTotal = csRounded * csYears * 12
             // 차량 처분 시 공격 총액
             val csAggressiveMonthly = Math.ceil(csRounded * 2.0 / 3.0).toInt()
-            var csAggressiveRounded = ((csAggressiveMonthly + 2) / 5) * 5
-            if (csAggressiveRounded < 40) csAggressiveRounded = csRounded
+            var csAggressiveRounded = csAggressiveMonthly
+            if (csAggressiveRounded < 45) csAggressiveRounded = csRounded
             var csAggressiveYears = Math.ceil(csTotalPayment.toDouble() / csAggressiveRounded / 12.0).toInt()
             if (csAggressiveYears > 10) {
-                csAggressiveRounded = ((Math.ceil(csTotalPayment.toDouble() / 120).toInt() + 2) / 5) * 5
+                csAggressiveRounded = Math.ceil(csTotalPayment.toDouble() / 120).toInt()
                 csAggressiveYears = 10
             }
             carSaleAggressiveTotal = csAggressiveRounded * csAggressiveYears * 12
             // 차량 처분 시 최종 년수/변제금 (percentage 적용)
             val csEffectiveMax = Math.min(csAggressiveYears, csYears + 4).coerceAtLeast(csYears)
-            carSaleFinalYear = csYears  // 기본값 (나중에 percentage 적용 시 재계산)
-            val csRawMonthly = if (csYears > 0) Math.ceil(csTotalPayment.toDouble() / (csYears * 12)).toInt() else csRounded
-            carSaleFinalMonthly = ((csRawMonthly + 4) / 5) * 5
-            if (carSaleFinalMonthly < 40) carSaleFinalMonthly = 40
-            // 우선 조건: 월 변제금이 총 채무 3%보다 높으면 장기 공격
-            if (carSaleFinalMonthly > targetDebt * 0.03) {
-                carSaleFinalYear = csAggressiveYears
-                carSaleFinalMonthly = csAggressiveRounded
+            // 차량처분 최종 년수: 본체와 동일한 5단계 로직 적용
+            val csSurplus = income - livingCostShinbok
+            val csIsConservative = hasAuction || hasSeizure || hasGambling ||
+                recentDebtRatio >= 50 || delinquentDays >= 90 || hasOwnRealEstate
+            val csIsAggressive = income <= livingCostShinbok
+            val csIsTowardConservative = hasStock || hasCrypto || majorCreditorRatio > 50 ||
+                (csSurplus > 0 && csSurplus < targetDebt * 0.03) ||
+                (recentDebtRatio >= 30 && recentDebtRatio < 50)
+            val csIsTowardAggressive = (csSurplus > targetDebt * 0.03) || isFreelancer ||
+                (shortTermTotal > 0 && shortTermTotal < longTermTotal - 1000)
+            carSaleFinalYear = when {
+                csIsConservative -> csYears
+                csIsAggressive -> csAggressiveYears
+                csIsTowardConservative -> Math.round((3.0 * csYears + csAggressiveYears) / 4.0).toInt()
+                csIsTowardAggressive -> Math.round((csYears + 3.0 * csAggressiveYears) / 4.0).toInt()
+                else -> Math.round((csYears + csAggressiveYears) / 2.0).toInt()
             }
+            carSaleFinalYear = carSaleFinalYear.coerceIn(csYears, maxOf(csYears, csAggressiveYears))
+            carSaleFinalMonthly = if (carSaleFinalYear > 0) csTotalPayment / (carSaleFinalYear * 12) else csRounded
+            if (carSaleFinalMonthly < 45) carSaleFinalMonthly = 45
             Log.d("HWP_CALC", "차량처분 장기총액: 보수=${csRounded}만×${csYears}년=$carSaleLongTermTotal, 공격=${csAggressiveRounded}만×${csAggressiveYears}년=$carSaleAggressiveTotal, 최종=${carSaleFinalMonthly}만×${carSaleFinalYear}년")
         }
 
@@ -3227,7 +4025,7 @@ class MainActivity : AppCompatActivity() {
         val effectiveLongTermTotal = if (shortTermCarSaleApplied || longTermCarBlockedEffective) carSaleLongTermTotal else longTermTotal
         val effectiveAggressiveTotal = if (shortTermCarSaleApplied || longTermCarBlockedEffective) carSaleAggressiveTotal else aggressiveTotal
 
-        val propertyDamboDebt = aiDamboDebt
+        val propertyDamboDebt = parsedDamboTotal
 
         // ============= 장기 최종 년수/변제금 계산 =============
         var finalYear = 0
@@ -3235,7 +4033,9 @@ class MainActivity : AppCompatActivity() {
         var longTermAggressive = false
         val longTermBlockedByAuction = hasAuction  // 경매 진행중 → 장기 불가
         val longTermBlockedBySeizure = hasSeizure  // 압류 진행중 → 장기 불가
-        val longTermFullyBlocked = ((longTermPropertyExcess || longTermCarBlockedEffective) && !canLongTermAfterCarSale) || longTermDebtOverLimit || longTermBlockedByAuction || longTermDebtInsufficient
+        val allDebtIsGuarantee = guaranteeDebtMan > 0 && guaranteeDebtMan >= targetDebt  // 모든 채권이 지급보증 → 장기 불가
+        if (allDebtIsGuarantee) Log.d("HWP_CALC", "장기 불가: 모든 채권이 지급보증채무 (${guaranteeDebtMan}만/${targetDebt}만)")
+        val longTermFullyBlocked = ((longTermPropertyExcess || longTermCarBlockedEffective) && !canLongTermAfterCarSale) || longTermDebtOverLimit || longTermBlockedByAuction || longTermDebtInsufficient || allDebtIsGuarantee
 
         if (targetDebt > 0 && longTermYears > 0 && totalPayment > 0 && !longTermFullyBlocked) {
             // 보수 기간이 3년 이하이면 3년으로 설정
@@ -3254,69 +4054,56 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // 퍼센티지 결정 (각 조건 독립 체크, 가장 높은 퍼센티지 적용)
-            var percentage = 50 // 기본값
+            // 최종 년수 결정 (5단계: 보수 → 보수방향 → 중간 → 공격방향 → 공격)
+            val surplus = income - livingCostShinbok
 
-            // 100% 조건 (보수)
-            if (isOwnPropertyAuction || (hasSeizure && hasOwnRealEstate) || hasGambling || recentDebtRatio >= 50 ||
-                dischargeNotClearedIn12Months ||
-                majorCreditorRatio > 50) {
-                percentage = 100
+            // 보수 그대로: 경매/압류/도박/최근50%+/장기연체/집처분
+            val isConservative = hasAuction || hasSeizure || hasGambling ||
+                recentDebtRatio >= 50 || delinquentDays >= 90 || hasOwnRealEstate
+
+            // 공격 그대로: 소득 <= 생계비
+            val isAggressive = income <= livingCostShinbok
+
+            // 보수 방향 (3*보수+공격)/4: 주식/코인/소득<3%/최근30-50%/과반
+            val isTowardConservative = hasStock || hasCrypto || majorCreditorRatio > 50 ||
+                (surplus > 0 && surplus < targetDebt * 0.03) ||
+                (recentDebtRatio >= 30 && recentDebtRatio < 50)
+
+            // 공격 방향 (보수+3*공격)/4: 소득>3%/프리랜서/단기<장기-1000
+            val isTowardAggressive = (surplus > targetDebt * 0.03) || isFreelancer ||
+                (shortTermTotal > 0 && shortTermTotal < longTermTotal - 1000)
+
+            val yearLabel: String
+            finalYear = when {
+                isConservative -> { yearLabel = "보수"; longTermYears }
+                isAggressive -> { yearLabel = "공격"; aggressiveYears }
+                isTowardConservative -> { yearLabel = "(3보수+공격)/4"; Math.round((3.0 * longTermYears + aggressiveYears) / 4.0).toInt() }
+                isTowardAggressive -> { yearLabel = "(보수+3공격)/4"; Math.round((longTermYears + 3.0 * aggressiveYears) / 4.0).toInt() }
+                else -> { yearLabel = "(보수+공격)/2"; Math.round((longTermYears + aggressiveYears) / 2.0).toInt() }
             }
+            finalYear = finalYear.coerceIn(longTermYears, maxOf(longTermYears, aggressiveYears))
 
-            // 75% 조건
-            if (percentage < 75) {
-                val surplus = income - livingCostShinbok
-                if (hasStock || hasCrypto ||
-                    (surplus > 0 && surplus < targetDebt * 0.03) ||
-                    (recentDebtRatio >= 30 && recentDebtRatio < 50)) {
-                    percentage = 75
+            // 최종 월변제금 계산: 최소 45만
+            finalMonthly = if (finalYear > 0) totalPayment / (finalYear * 12) else 0
+            if (finalMonthly < 45) {
+                finalMonthly = 45
+                // 최소 월변제금 × 기간이 총변제금 초과 시 기간 축소 후 월변제금 재계산
+                val maxYears = (totalPayment.toDouble() / (45 * 12)).toInt().coerceAtLeast(1)
+                if (finalYear > maxYears) {
+                    finalYear = maxYears
+                    finalMonthly = totalPayment / (finalYear * 12)
                 }
             }
 
-            // 25% 조건 (50% 기본값보다 낮으므로, 다른 높은 조건이 없을 때만 적용)
-            if (percentage == 50) {
-                val surplus25 = income - livingCostShinbok
-                if ((surplus25 > targetDebt * 0.03) || isFreelancer ||
-                    delinquentDays >= 90 ||
-                    (shortTermTotal > 0 && shortTermTotal < longTermTotal - 1000)) {
-                    percentage = 25
-                }
-            }
-
-            // 0% 조건 (공격) - 가장 낮은 우선순위, 다른 조건이 아무것도 없을 때만
-            if (percentage == 50 && income <= livingCostShinbok) {
-                percentage = 0
-            }
-
-            // 최종 년수 계산: 범위 차이 1년 이하면 보수년수로 고정
-            finalYear = if (effectiveMax - longTermYears <= 1) {
-                longTermYears
-            } else {
-                longTermYears + Math.round((effectiveMax - longTermYears) * (1.0 - percentage / 100.0)).toInt()
-            }
-            finalYear = finalYear.coerceIn(longTermYears, effectiveMax)
-
-            // 최종 월변제금 계산: 5만 단위 올림, 최소 40만
-            val rawMonthly = Math.ceil(totalPayment.toDouble() / (finalYear * 12)).toInt()
-            finalMonthly = ((rawMonthly + 4) / 5) * 5  // 5만 단위 올림
-            if (finalMonthly < 40) finalMonthly = 40
-
-            // 우선 조건: 장기 월 변제금이 총 채무 3%보다 높으면 장기 공격
-            if (finalMonthly > targetDebt * 0.03) {
-                finalYear = aggressiveYears
-                finalMonthly = roundedAggressiveMonthly
-                longTermAggressive = true
-            }
-
-            Log.d("HWP_CALC", "최종 년수 계산: 보수=${longTermYears}년, 공격=${aggressiveYears}년, effectiveMax=$effectiveMax, percentage=$percentage%, finalYear=$finalYear, finalMonthly=${finalMonthly}만, 공격전환=$longTermAggressive")
+            Log.d("HWP_CALC", "최종 년수 계산: 보수=${longTermYears}년, 공격=${aggressiveYears}년, $yearLabel → finalYear=$finalYear, finalMonthly=${finalMonthly}만")
         }
 
         // 차량 처분시 단기 가능이면 단기 가능으로 판단
         val effectiveShortTermBlocked = shortTermBlocked && !shortTermCarSaleApplied
         val shortTermBlockedByDischarge = effectiveShortTermBlocked && dischargeWithin5Years
-        val hoeBlocked = shortTermBlockedByDischarge || shortTermDebtOverLimit || hasHfcMortgage  // 회(개인회생) 불가: 면책 or 채무한도초과 or 한국주택금융공사
-        Log.d("HWP_CALC", "회불가 판단: hoeBlocked=$hoeBlocked (면책단기=${shortTermBlockedByDischarge}, 채무한도=${shortTermDebtOverLimit}, 한국주택=${hasHfcMortgage})")
+        val lowIncome = parsedMonthlyIncome <= 100  // 소득 100만 이하 → 회생 불가
+        val hoeBlocked = shortTermBlockedByDischarge || shortTermDebtOverLimit || hasHfcMortgage || lowIncome  // 회(개인회생) 불가: 면책 or 채무한도초과 or 한국주택금융공사 or 소득100만이하
+        Log.d("HWP_CALC", "회불가 판단: hoeBlocked=$hoeBlocked (면책단기=${shortTermBlockedByDischarge}, 채무한도=${shortTermDebtOverLimit}, 한국주택=${hasHfcMortgage}, 소득100이하=$lowIncome)")
         // 새새 연체 분기: 90일 이상 회새/새, 나머지 새새 (연체 없으면 회새 아님)
         val saeDiagnosis = when {
             actualDelinquentDays >= 90 || delinquentDays >= 90 -> if (hoeBlocked) "새" else "회새"
@@ -3332,9 +4119,9 @@ class MainActivity : AppCompatActivity() {
 
 
 
-        val creditorCount = if (aiCreditorCount > 0) aiCreditorCount else 0
-        Log.d("HWP_CALC", "채권사 수: $creditorCount (AI=$aiCreditorCount)")
-        val isShinbokSingleCreditor = creditorCount == 1 && (majorCreditorFromAI.contains("신복") || majorCreditorFromAI.contains("신복위"))
+        val creditorCount = parsedCreditorCount
+        Log.d("HWP_CALC", "채권사 수: $creditorCount (텍스트파싱)")
+        val isShinbokSingleCreditor = creditorCount == 1 && (effectiveMajorCreditor.contains("신복") || effectiveMajorCreditor.contains("신복위"))
         if (creditorCount == 1 && !isShinbokSingleCreditor && !hasPdfFile) specialNotesList.add("채권사 1건")
 
         if (studentLoanRatio >= 50 && !longTermDebtOverLimit) {
@@ -3361,8 +4148,8 @@ class MainActivity : AppCompatActivity() {
             if (canLongTermAfterCarSale && diagnosisAfterCarSale.isNotEmpty()) {
                 diagnosis = diagnosisAfterCarSale
                 diagnosisNote = "(차량 처분시 가능)"
-            } else if ((!hasOwnRealEstate && hasOthersRealEstate) || (regionIsSpouseOwned && regionSpouseProperty > 0 && !longTermPropertyExcess)) {
-                // 등본 분리시 타인명의 재산 제외 → 장기 가능
+            } else if (isRegistrySplit && !longTermPropertyExcess) {
+                // 등본 분리시 재산초과 해소 → 장기 가능
                 diagnosis = when {
                     delinquentDays >= 90 -> if (dischargeWithin5Years) "워유워" else "회워"
                     delinquentDays >= 30 -> if (hoeBlocked) "프유워" else "프회워"
@@ -3509,6 +4296,7 @@ class MainActivity : AppCompatActivity() {
 
         // 6개월 이내 비율 30% 미만 가능 날짜 계산 (방생/단순유리/단순진행 등 확정 진단 시 건너뜀)
         val isSaeDiagnosis = diagnosis == "새새" || diagnosis == "새" || diagnosis == "회새"
+        if (isSaeDiagnosis) specialNotesList.removeAll { it.contains("차량처분 필요") }
         val skipRecentDateCalc = diagnosis == "방생" || diagnosis.startsWith("단순")
         // 6개월 30% 이상 → 가능일자 표기 (단기 가능 여부 무관하게 날짜 계산)
         if (recentDebtRatio >= 30 && recentDebtEntries.isNotEmpty() && targetDebt > 0 && !skipRecentDateCalc && !(effectiveShortTermBlocked && longTermFullyBlocked)) {
@@ -3623,18 +4411,15 @@ class MainActivity : AppCompatActivity() {
         binding.name.text = "[이름] $name"
         val incomeSuffix = if (isIncomeEstimated) " (예정)" else ""
         binding.card.text = "[소득] ${income}만${incomeSuffix}"
-        val studentLoanApplied = studentLoanMan > 0 && aiIncludesStudentLoan
+        val studentLoanApplied = studentLoanMan > 0 && parsedIncludesStudentLoan
         val datSuffix = buildString {
-            if ((needsCarDisposal || wantsCarSale) && carDebtDeficit > 0) append(" (차량 처분후)")
             if (studentLoanApplied) append(" (학자금 제외)")
         }
-        val datBase = if ((needsCarDisposal || wantsCarSale) && carDebtDeficit > 0) targetDebtBeforeDisposal + carDebtDeficit else targetDebtBeforeDisposal
+        val datBase = targetDebtBeforeDisposal
         val datDisplayAmount = if (studentLoanApplied) maxOf(datBase - studentLoanMan, 0) else datBase
         binding.dat.text = "[대상] ${formatToEok(datDisplayAmount)}$datSuffix"
         binding.money.text = when {
-            isRegistrySplit && hasBunyangGwon -> "[재산] ${formatToEok(netProperty)} (등본 분리 / 분양권 포기 후)"
-            isRegistrySplit -> "[재산] ${formatToEok(netProperty)} (등본 분리 시)"
-            hasBunyangGwon -> "[재산] ${formatToEok(netProperty)} (분양권 포기 후)"
+            isRegistrySplit || regionIsSpouseOwned -> "[재산] ${formatToEok(netProperty)} (등본 분리 시)"
             else -> "[재산] ${formatToEok(netProperty)}"
         }
 
@@ -3674,7 +4459,8 @@ class MainActivity : AppCompatActivity() {
         } else if (longTermDebtInsufficient) {
             longTermText.append("[장기] 장기 불가 (채무 부족)")
         } else if (longTermFullyBlocked) {
-            val blockedReason = if (longTermCarBlockedEffective) {
+            val blockedReason = if (allDebtIsGuarantee) "전액 지급보증"
+            else if (longTermCarBlockedEffective) {
                 val reasons = buildList {
                     if (carTotalSise >= 1000) add("시세${carTotalSise}만")
                     if (carCount >= 2) add("${carCount}대")
@@ -3692,6 +4478,8 @@ class MainActivity : AppCompatActivity() {
         }
         if (canApplySae && saeTotalPayment > 0) {
             longTermText.append("\n[새새] ${saeMonthly}만 / ${saeYears}년납")
+        } else if (hasBusinessHistory && isBusinessOwner && saeDebtOverLimit) {
+            longTermText.append("\n[새새] 새새 불가(채무한도초과 담보${formatToEok(totalSecuredDebt)})")
         }
         binding.test2.text = longTermText.toString()
 
@@ -3812,20 +4600,203 @@ class MainActivity : AppCompatActivity() {
             diagnosis = diagnosis.replace("새새", "새")
         }
 
+        // 중간 회 제거: 담보+신용 공존, 단기 최종 불가, 사업자 → 신회워→신유워, 프회워→프유워
+        val hasDamboAndCredit = parsedDamboCreditorNames.any { it in parsedCreditorMap }
+        val removeMiddleHoe = hasDamboAndCredit || effectiveShortTermBlocked || isBusinessOwner
+        if (removeMiddleHoe) {
+            if (diagnosis.contains("신회워") || diagnosis.contains("프회워")) {
+                diagnosis = diagnosis.replace("신회워", "신유워").replace("프회워", "프유워")
+                val reason = when {
+                    hasDamboAndCredit -> "담보+신용"
+                    effectiveShortTermBlocked -> "단기불가"
+                    else -> "사업자"
+                }
+                Log.d("HWP_CALC", "중간 회 제거($reason): $diagnosis")
+            }
+        }
+        // 장기연체(90일+) → 회워/회새 유지 (중간 회 제거 대상 아님)
+        if (delinquentDays >= 90 && (diagnosis == "신유워" || diagnosis == "프유워")) {
+            diagnosis = "회워"
+            Log.d("HWP_CALC", "장기연체 90일+ → 회워로 변경")
+        }
+
+        // 회워 진단 → 10%탕감(90%)으로 재조정 (기본 15%탕감보다 낮음)
+        if (diagnosis == "회워" && repaymentRate == 85) {
+            repaymentRate = 90
+            rateReason = "회워"
+            Log.d("HWP_CALC", "회워 진단 → 변제율 90%(10%탕감)으로 재조정")
+        }
+
         var finalDiagnosis = if (diagnosisNote.isNotEmpty()) "$diagnosis $diagnosisNote" else diagnosis
 
         if (shortTermCarSaleApplied) finalDiagnosis = "차량 처분 시 $finalDiagnosis"
-        if (repaymentRate == 100 && !diagnosis.startsWith("단순") && diagnosis != "방생") finalDiagnosis = "$finalDiagnosis, 부결고지"
+        if (diagnosis != "방생") {
+            if (isSaeDiagnosis) {
+                // 새새 진단: 재산-대상채무 >= 1억일 때만 부결고지
+                if (netProperty - targetDebt >= 10000) finalDiagnosis = "$finalDiagnosis, 부결고지"
+            } else {
+                if (repaymentRate == 100 && majorCreditorRatio >= 50 && !diagnosis.startsWith("단순")) finalDiagnosis = "$finalDiagnosis, 부결고지"
+                val daebuRatio = if (originalTargetDebt > 0) daebuDebtMan.toDouble() / originalTargetDebt * 100 else 0.0
+                if (daebuRatio > 50 && !finalDiagnosis.contains("부결고지")) finalDiagnosis = "$finalDiagnosis, 부결고지"
+            }
+            if (hasBunyangGwon) finalDiagnosis = "$finalDiagnosis, 분양권 포기해야 진행 가능"
+            if (originalTargetDebt <= 4000 && originalTargetDebt > 0) finalDiagnosis = "$finalDiagnosis, 수임료 오픈"
+            if (repaymentRate == 100 || isSaeDiagnosis) finalDiagnosis = "$finalDiagnosis, 수임 별도"
+        }
         binding.testing.text = "[진단] $finalDiagnosis"
         binding.half.text = ""
 
+        // 거래처 진단 계산 (최소 월 50만, 최대 8년)
+        var clientFinalMonthly = 0
+        var clientFinalYear = 0
+        var clientRoundedLongTermMonthly = 0
+        var clientLongTermYears = 0
+        if (targetDebt > 0 && !longTermFullyBlocked) {
+            // 보수 계산 (min 50만, max 96개월)
+            val step1 = income - livingCostShinbok - parentDeduction
+            val step2 = income - livingCostShinbok
+            var cltMonthly = when {
+                step1 >= 50 -> step1
+                step2 >= 50 -> step2
+                else -> 50
+            }
+            val cltTotalMonths = if (cltMonthly > 0) Math.ceil(totalPayment.toDouble() / cltMonthly).toInt() else 0
+            if (cltTotalMonths > 96) {
+                cltMonthly = Math.ceil(totalPayment.toDouble() / 96).toInt()
+            }
+            clientRoundedLongTermMonthly = cltMonthly
+
+            // 보수 년수 (max 8년)
+            if (clientRoundedLongTermMonthly > 0) {
+                val exactYears = totalPayment.toDouble() / clientRoundedLongTermMonthly / 12.0
+                clientLongTermYears = if (exactYears - Math.floor(exactYears) >= 0.35) Math.ceil(exactYears).toInt() else Math.floor(exactYears).toInt()
+                clientLongTermYears = clientLongTermYears.coerceIn(1, 8)
+                // 월변제금 × 기간이 총변제금 초과 시 기간 축소 후 월변제금 재계산
+                val maxYears = (totalPayment.toDouble() / (clientRoundedLongTermMonthly * 12)).toInt().coerceAtLeast(1)
+                if (clientLongTermYears > maxYears) {
+                    clientLongTermYears = maxYears
+                    clientRoundedLongTermMonthly = totalPayment / (clientLongTermYears * 12)
+                }
+            }
+
+            // 프리랜서
+            if (isFreelancer && totalPayment > 0) {
+                val freelancerMonthly = Math.ceil(totalPayment.toDouble() / 72).toInt()
+                if (freelancerMonthly <= 50) {
+                    clientRoundedLongTermMonthly = 50
+                    val exactYears = totalPayment.toDouble() / 50 / 12.0
+                    clientLongTermYears = if (exactYears - Math.floor(exactYears) >= 0.35) Math.ceil(exactYears).toInt() else Math.floor(exactYears).toInt()
+                    clientLongTermYears = clientLongTermYears.coerceIn(3, 8)
+                } else {
+                    clientRoundedLongTermMonthly = freelancerMonthly
+                    clientLongTermYears = 6
+                }
+            }
+
+            // 1년 미만 완납 → 100% 변제, 최소 3년
+            if (clientRoundedLongTermMonthly > 0 && totalPayment < clientRoundedLongTermMonthly * 12) {
+                clientRoundedLongTermMonthly = Math.ceil(targetDebt.toDouble() / 36).toInt()
+                if (clientRoundedLongTermMonthly < 50) clientRoundedLongTermMonthly = 50
+                clientLongTermYears = 3
+            }
+
+            // 공격 계산 (min 50만, max 8년)
+            var cltAggressiveMonthly = Math.ceil(clientRoundedLongTermMonthly * 2.0 / 3.0).toInt()
+            if (cltAggressiveMonthly < 50) cltAggressiveMonthly = clientRoundedLongTermMonthly
+            var cltAggressiveYears = Math.ceil(totalPayment.toDouble() / cltAggressiveMonthly / 12.0).toInt()
+            if (cltAggressiveYears > 8) {
+                cltAggressiveMonthly = Math.ceil(totalPayment.toDouble() / 96).toInt()
+                cltAggressiveYears = 8
+            }
+
+            // 최종 년수/변제금 (percentage 재적용, max 8년)
+            if (clientLongTermYears < 3) clientLongTermYears = 3
+            val cltEffectiveMax = Math.min(cltAggressiveYears, clientLongTermYears + 4).coerceAtLeast(clientLongTermYears).coerceAtMost(8)
+
+            // 거래처 최종 년수: 본체와 동일한 5단계 로직 (max 8년)
+            val cltSurplus = income - livingCostShinbok
+            val cltIsConservative = hasAuction || hasSeizure || hasGambling ||
+                recentDebtRatio >= 50 || delinquentDays >= 90 || hasOwnRealEstate
+            val cltIsAggressive = income <= livingCostShinbok
+            val cltIsTowardConservative = hasStock || hasCrypto || majorCreditorRatio > 50 ||
+                (cltSurplus > 0 && cltSurplus < targetDebt * 0.03) ||
+                (recentDebtRatio >= 30 && recentDebtRatio < 50)
+            val cltIsTowardAggressive = (cltSurplus > targetDebt * 0.03) || isFreelancer ||
+                (shortTermTotal > 0 && shortTermTotal < longTermTotal - 1000)
+            clientFinalYear = when {
+                cltIsConservative -> clientLongTermYears
+                cltIsAggressive -> cltAggressiveYears
+                cltIsTowardConservative -> Math.round((3.0 * clientLongTermYears + cltAggressiveYears) / 4.0).toInt()
+                cltIsTowardAggressive -> Math.round((clientLongTermYears + 3.0 * cltAggressiveYears) / 4.0).toInt()
+                else -> Math.round((clientLongTermYears + cltAggressiveYears) / 2.0).toInt()
+            }
+            clientFinalYear = clientFinalYear.coerceIn(clientLongTermYears, maxOf(clientLongTermYears, cltAggressiveYears)).coerceAtMost(8)
+
+            clientFinalMonthly = if (clientFinalYear > 0) totalPayment / (clientFinalYear * 12) else 0
+            if (clientFinalMonthly < 50) {
+                clientFinalMonthly = 50
+                // 월변제금 × 기간이 총변제금 초과 시 기간 축소 후 월변제금 재계산
+                val maxYears = (totalPayment.toDouble() / (50 * 12)).toInt().coerceAtLeast(1)
+                if (clientFinalYear > maxYears) {
+                    clientFinalYear = maxYears
+                    clientFinalMonthly = totalPayment / (clientFinalYear * 12)
+                }
+            }
+        }
+
+        // 거래처 새새 계산 (min 50만, max 8년)
+        var clientSaeMonthly = 0; var clientSaeYears = 0; var clientSaeTotalPayment = 0
+        if (canApplySae && targetDebt > 0 && saeTotalPayment > 0) {
+            clientSaeTotalPayment = saeTotalPayment
+            val incomeRatio = income.toDouble() / targetDebt * 100
+            clientSaeYears = when {
+                incomeRatio > 6 -> 5
+                incomeRatio > 3 -> 8
+                else -> 8  // 거래처는 max 8년
+            }
+            clientSaeMonthly = Math.ceil(clientSaeTotalPayment.toDouble() / (clientSaeYears * 12)).toInt()
+            if (clientSaeMonthly <= 50) {
+                clientSaeMonthly = 50
+                val exactYears = clientSaeTotalPayment.toDouble() / 50 / 12.0
+                clientSaeYears = if (exactYears - Math.floor(exactYears) >= 0.35) Math.ceil(exactYears).toInt() else Math.floor(exactYears).toInt()
+                clientSaeYears = clientSaeYears.coerceIn(1, 8)
+                clientSaeTotalPayment = clientSaeMonthly * clientSaeYears * 12
+            } else {
+                clientSaeTotalPayment = clientSaeMonthly * clientSaeYears * 12
+            }
+        }
+
+        // 거래처 모드일 때 장기/새새 결과를 거래처 기준으로 덮어쓰기
+        if (isClientMode) {
+            val clientLongTermText = StringBuilder()
+            // 불가 사유는 레고와 동일
+            val legoTest2 = binding.test2.text.toString()
+            val legoFirstLine = legoTest2.split("\n").firstOrNull() ?: ""
+            if (targetDebt > 0 && !longTermFullyBlocked && clientFinalMonthly > 0) {
+                val studentLoanLongSuffix = if (studentLoanApplied) " (학자금 제외)" else ""
+                clientLongTermText.append("[장기] ${clientFinalMonthly}만 / ${clientFinalYear}년납$studentLoanLongSuffix")
+            } else {
+                clientLongTermText.append(legoFirstLine)
+            }
+            if (canApplySae && clientSaeTotalPayment > 0) {
+                clientLongTermText.append("\n[새새] ${clientSaeMonthly}만 / ${clientSaeYears}년납")
+            } else if (hasBusinessHistory && isBusinessOwner && saeDebtOverLimit) {
+                clientLongTermText.append("\n[새새] 새새 불가(채무한도초과 담보${formatToEok(totalSecuredDebt)})")
+            }
+            binding.test2.text = clientLongTermText.toString()
+        }
+
         Log.d("HWP_CALC", "이름: $name, 소득: ${income}만, 대상: ${targetDebt}만, 재산: ${netProperty}만, 6개월비율: ${String.format("%.1f", recentDebtRatio)}%, 진단: $finalDiagnosis")
+        Log.d("HWP_CALC", "거래처 장기: ${clientFinalMonthly}만/${clientFinalYear}년, 새새: ${clientSaeMonthly}만/${clientSaeYears}년")
     }
 
     // ============= 유틸리티 =============
     private fun extractAmountAfterKeyword(text: String, keyword: String): Int {
         if (!text.contains(keyword)) return 0
-        return extractAmount(text.substring(text.indexOf(keyword)))
+        val afterKeyword = text.substring(text.indexOf(keyword))
+        // "/" 구분자 이전까지만 추출 (시세 5억 / 대출 3억 → 시세 5억만 추출)
+        val segment = afterKeyword.split("/")[0]
+        return extractAmount(segment)
     }
 
     private fun formatToEok(amountInMan: Int): String {
@@ -3978,16 +4949,19 @@ class MainActivity : AppCompatActivity() {
 
             when {
                 lowerName.endsWith(".hwp") -> hwpList.add(baseName to uri)
-                lowerName.endsWith(".pdf") -> pdfList.add(baseName to uri)
+                lowerName.endsWith(".pdf") || lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg") || lowerName.endsWith(".png") || lowerName.endsWith(".bmp") || lowerName.endsWith(".webp") -> pdfList.add(baseName to uri)
             }
         }
 
         batchGroups.clear()
         for ((hwpBase, hwpUri) in hwpList) {
-            // HWP 파일명에서 이름 부분만 추출 (괄호 앞) - 예: "강동진(동승, 주용소개건)" → "강동진"
-            val hwpName = hwpBase.substringBefore("(").trim()
+            // HWP/PDF 파일명 공통 접두어(이름)로 매칭
+            // "김현식의정" ↔ "김현식합의서" → 공통 "김현식" (3자) → 매칭
             val matchedPdfs = pdfList
-                .filter { (pdfBase, _) -> pdfBase.startsWith(hwpName) }
+                .filter { (pdfBase, _) ->
+                    val commonLen = hwpBase.zip(pdfBase).takeWhile { (a, b) -> a == b }.count()
+                    commonLen >= 2
+                }
                 .map { it.second }
             batchGroups.add(BatchFileGroup(hwpBase, hwpUri, matchedPdfs))
         }
@@ -4029,22 +5003,23 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // 같은 이름의 PDF 텍스트 추출 후 합치기 (단일 모드와 동일 필터링)
-        val pdfTexts = ArrayList<String>()
+        // 같은 이름의 PDF 텍스트 추출 후 처리 (합의서/변제계획안=텍스트파싱, 상환내역서=OCR)
         val ocrPdfUris = ArrayList<Pair<Uri, String>>()
         for (pdfUri in group.pdfUris) {
             val pdfFileName = getFileName(pdfUri) ?: "PDF"
             val lowerFileName = pdfFileName.lowercase()
-            val isRelevantPdf = lowerFileName.contains("변제계획") || lowerFileName.contains("소금원") ||
-                    lowerFileName.contains("소득금액") || lowerFileName.contains("변제예정")
-            if (isRelevantPdf) {
-                val text = extractPdfText(pdfUri)
-                if (text.isNotEmpty()) {
-                    pdfTexts.add("=== PDF: $pdfFileName ===\n$text")
-                    Log.d("BATCH", "PDF 추출 (AI포함): $pdfFileName (${text.length}자)")
+            when {
+                lowerFileName.contains("합의") -> {
+                    // 합의서는 항상 Gemini Vision으로 처리 (테이블 추출이 필요)
+                    Log.d("BATCH", "합의서 → Gemini Vision 처리 ($pdfFileName)")
+                    ocrPdfUris.add(Pair(pdfUri, pdfFileName))
                 }
-            } else {
-                ocrPdfUris.add(Pair(pdfUri, pdfFileName))
+                lowerFileName.contains("변제계획") || lowerFileName.contains("변제예정") -> {
+                    val text = extractPdfText(pdfUri)
+                    if (text.length > 50) parseRecoveryPlanPdfText(text, pdfFileName)
+                    else ocrPdfUris.add(Pair(pdfUri, pdfFileName))  // 이미지 PDF → OCR
+                }
+                else -> ocrPdfUris.add(Pair(pdfUri, pdfFileName))
             }
         }
 
@@ -4054,30 +5029,14 @@ class MainActivity : AppCompatActivity() {
                     hwpText += "\n유예기간 ${ocrResult.defermentMonths}개월"
                     Log.d("BATCH", "PDF OCR 유예기간 추출: ${ocrResult.defermentMonths}개월")
                 }
-                if (ocrResult.agreementDebt > 0) {
-                    pdfAgreementDebt = ocrResult.agreementDebt
-                    Log.d("BATCH", "PDF OCR 합의서 대상채무 추출: ${ocrResult.agreementDebt}만")
-                }
-                if (ocrResult.processName.isNotEmpty()) {
-                    pdfAgreementProcess = ocrResult.processName
-                    Log.d("BATCH", "PDF OCR 진행중 제도: ${ocrResult.processName}")
-                }
                 if (ocrResult.applicationDate.isNotEmpty()) {
                     pdfApplicationDate = ocrResult.applicationDate
                     Log.d("BATCH", "PDF OCR 신청일자 추출: ${ocrResult.applicationDate}")
                 }
-                if (ocrResult.excludedGuaranteeDebt > 0) {
-                    pdfExcludedGuaranteeDebt = ocrResult.excludedGuaranteeDebt
-                    Log.d("BATCH", "PDF 합의서 제외 보증서담보대출: ${ocrResult.excludedGuaranteeDebt}만")
-                }
-                if (ocrResult.excludedOtherDebt > 0) {
-                    pdfExcludedOtherDebt = ocrResult.excludedOtherDebt
-                    Log.d("BATCH", "PDF 합의서 제외 기타: ${ocrResult.excludedOtherDebt}만")
-                }
-                finishFileProcessing(pdfTexts)
+                finishFileProcessing()
             }
         } else {
-            finishFileProcessing(pdfTexts)
+            finishFileProcessing()
         }
     }
 
@@ -4120,14 +5079,12 @@ class MainActivity : AppCompatActivity() {
         acost = 0; bCost = 0.0; bValue = 0; card = 0; cost = 0; value = 0
         baby = "0"; korea = "X"
 
-        // AI 데이터 초기화
-        aiIncome = 0; aiTargetDebt = 0; aiProperty = 0; aiOthersProperty = 0; pdfAgreementDebt = 0; pdfAgreementProcess = ""; pdfApplicationDate = ""; hasPdfFile = false
-        aiCreditorCount = 0; aiDefermentMonths = 0; aiSogumwonMonthly = 0
-        aiDataReady = false
-        aiMajorCreditor = ""; aiMajorCreditorDebt = 0
-        aiNonAffiliatedDebt = 0; aiNonAffiliatedNames = mutableListOf(); aiNonAffiliatedEntries = mutableListOf(); aiCreditorNames = mutableListOf(); aiCreditorList = mutableListOf(); aiHasBusinessHistory = false
-        aiBusinessStartYear = 0; aiBusinessStartMonth = 0; aiBusinessEndYear = 0; aiHasRecoveryPlan = false; aiDamboDebt = 0; aiCardUsageTotal = 0
-        pdfExcludedGuaranteeDebt = 0; pdfExcludedOtherDebt = 0
+        // PDF 데이터 초기화
+        pdfAgreementDebt = 0; pdfAgreementProcess = ""; pdfApplicationDate = ""; hasPdfFile = false; pdfAgreementCreditors.clear()
+        aiDefermentMonths = 0
+        aiHasRecoveryPlan = false
+        pdfExcludedGuaranteeDebt = 0; pdfExcludedOtherDebt = 0; pdfExcludedDamboCreditors.clear()
+        pdfRecoveryDebt = 0; pdfRecoveryIncome = 0; pdfRecoveryMonths = 0
 
         // 파일 텍스트 초기화
         hwpText = ""; pdfText = ""
@@ -4147,153 +5104,4 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
-    // AI 데이터 추출 (재시도 지원)
-    private fun extractDataWithAI(text: String, retryCount: Int = 0) {
-        val maxRetry = 2  // 최대 재시도 횟수 (총 3회 시도)
-        if (retryCount == 0) aiExtractCancelled = false
-
-        if (!batchMode) {
-            runOnUiThread {
-                loadingDialog?.dismiss()
-                val retryMsg = if (retryCount > 0) " (재시도 ${retryCount}/${maxRetry})" else ""
-                loadingDialog = android.app.ProgressDialog(this).apply {
-                    setMessage("AI 데이터 분석 중...$retryMsg")
-                    setCancelable(false)
-                    setButton(android.app.ProgressDialog.BUTTON_NEGATIVE, "중단") { _, _ ->
-                        aiExtractCancelled = true
-                        dismiss()
-                        showToast("AI 추출 중단됨")
-                    }
-                    show()
-                }
-            }
-        }
-        AiDataExtractor.extract(text, object : AiDataExtractor.OnExtractListener {
-            override fun onSuccess(result: AiDataExtractor.ExtractResult) {
-                if (aiExtractCancelled) return
-                // AI가 핵심 값을 전부 0으로 반환하면 재시도
-                if (result.income == 0 && result.targetDebt == 0 && result.property == 0 && retryCount < maxRetry) {
-                    Log.w("AI_EXTRACT", "AI 응답 전부 0 → 재시도 (${retryCount + 1}/${maxRetry})")
-                    runOnUiThread { extractDataWithAI(text, retryCount + 1) }
-                    return
-                }
-                aiIncome = result.income
-                aiTargetDebt = result.targetDebt
-                aiProperty = result.property
-                aiOthersProperty = result.othersProperty
-                aiCreditorCount = result.creditorCount
-                // AI의 유예기간은 사용하지 않음 (할루시네이션 방지, HWP 텍스트에서 직접 파싱)
-                // aiDefermentMonths = result.defermentMonths
-                aiSogumwonMonthly = result.sogumwonMonthly
-                aiMajorCreditor = result.majorCreditor
-                aiMajorCreditorDebt = result.majorCreditorDebt
-                aiDamboDebt = result.damboDebt
-                aiTaxDebt = result.taxDebt
-                // 미협약 채무 계산: AI 채권사 목록 + AffiliateList 대조 (카드이용금액 제외)
-                // 대출 유형/카테고리명은 채권사가 아니므로 미협약 판단 제외
-                val loanTypeNames = setOf("신용대출", "신용", "카드", "카드대출", "담보", "담보대출", "대출", "기타", "기타대출", "총액", "국세", "지방세", "세금", "지급보증", "연대보증", "보증", "고소", "소송", "벌금", "물품대금")
-                // 물품대금/세금 등 비금융 채무는 미협약 판단 제외 (부분 매칭)
-                val nonFinancialKeywords = listOf("물품대금", "세금", "국세", "지방세", "공사대금", "대금", "급여", "임금", "월세", "보증금")
-                // 금융기관 키워드: 이 중 하나라도 없으면 비금융 → 미협약 판단 제외
-                val financialKeywords = listOf("은행", "카드", "캐피탈", "저축", "대부", "보험", "증권", "금융", "신협", "농협", "수협", "새마을", "조합", "재단", "보증", "자산관리", "추심", "생명", "화재", "손해", "상사", "할부", "여신", "리스", "펀드", "투자", "파이낸스", "캐시", "론", "크레디트", "신용정보", "상호", "공사", "에스비아이", "웰컴", "오케이", "페퍼", "제이티", "모아", "예스", "에이앤피")
-                var nonAffTotal = 0
-                val nonAffNames = mutableListOf<String>()
-                val nonAffEntries = mutableListOf<Pair<String, Int>>()
-                for (creditor in result.creditors) {
-                    val creditorNameTrimmed = creditor.name.replace(Regex("[\\s]"), "")
-                    if (creditor.isCard) {
-                        Log.d("AI_EXTRACT", "카드이용금액 (미협약 판단 제외): ${creditor.name} (${creditor.amount}만)")
-                        continue
-                    }
-                    if (loanTypeNames.contains(creditorNameTrimmed)) {
-                        Log.d("AI_EXTRACT", "대출유형명 (미협약 판단 제외): ${creditor.name} (${creditor.amount}만)")
-                        continue
-                    }
-                    if (nonFinancialKeywords.any { creditorNameTrimmed.contains(it) }) {
-                        Log.d("AI_EXTRACT", "비금융채무 (미협약 판단 제외): ${creditor.name} (${creditor.amount}만)")
-                        continue
-                    }
-                    val affiliated = AffiliateList.isAffiliated(creditor.name)
-                    if (!affiliated) {
-                        // 금융기관 키워드 없으면 비금융 채무 → 미협약 판단 제외
-                        val isFinancial = financialKeywords.any { creditorNameTrimmed.contains(it) }
-                        if (!isFinancial) {
-                            Log.d("AI_EXTRACT", "비금융 채권사 (미협약 제외): ${creditor.name} (${creditor.amount}만)")
-                        } else {
-                            nonAffTotal += creditor.amount
-                            nonAffNames.add(creditor.name)
-                            nonAffEntries.add(Pair(creditor.name, creditor.amount))
-                            Log.d("AI_EXTRACT", "미협약 채권사: ${creditor.name} (${creditor.amount}만)")
-                        }
-                    } else {
-                        Log.d("AI_EXTRACT", "협약 채권사: ${creditor.name} (${creditor.amount}만)")
-                    }
-                }
-                aiNonAffiliatedDebt = nonAffTotal
-                aiNonAffiliatedNames = nonAffNames
-                aiNonAffiliatedEntries = nonAffEntries
-                aiCreditorNames = result.creditors.map { it.name }.toMutableList()
-                aiCreditorList = result.creditors.map { CreditorInfo(it.name, it.amount, it.isCard) }.toMutableList()
-                aiCardUsageTotal = result.creditors.filter { it.isCard }.sumOf { it.amount }
-                Log.d("AI_EXTRACT", "미협약 채무 합계: ${nonAffTotal}만 (${result.creditors.size}개 채권사 중)")
-                Log.d("AI_EXTRACT", "카드이용금액 합계: ${aiCardUsageTotal}만")
-
-                aiHasBusinessHistory = result.hasBusinessHistory
-                aiBusinessStartYear = result.businessStartYear
-                aiBusinessStartMonth = result.businessStartMonth
-                aiBusinessEndYear = result.businessEndYear
-                aiHasRecoveryPlan = result.hasRecoveryPlan
-                // AI 할루시네이션 방지: 텍스트에 "변제계획" 키워드가 없으면 무시
-                if (aiHasRecoveryPlan && !text.contains("변제계획") && !text.contains("변제예정")) {
-                    aiHasRecoveryPlan = false
-                    Log.d("AI_EXTRACT", "변제계획안 할루시네이션 방지: 텍스트에 키워드 없음 → false")
-                }
-
-                // 소금원 소득이 HWP 소득보다 높으면 소금원 사용
-                if (aiSogumwonMonthly > aiIncome) {
-                    Log.d("AI_EXTRACT", "소금원 소득($aiSogumwonMonthly) > HWP 소득($aiIncome) → 소금원 적용")
-                    aiIncome = aiSogumwonMonthly
-                }
-
-                runOnUiThread {
-                    loadingDialog?.dismiss()
-                    Log.d("AI_EXTRACT", "AI 값 적용하여 재계산 시작")
-                    if (hwpText.isNotEmpty()) parseHwpData(hwpText)
-                    if (batchMode) {
-                        val groupName = batchGroups[batchIndex].baseName
-                        val pdfInfo = if (batchGroups[batchIndex].pdfUris.isNotEmpty()) " (+PDF)" else ""
-                        batchResults.add("===== ${batchIndex + 1}/${batchGroups.size} =====\n[파일] $groupName$pdfInfo\n${buildResultText()}")
-                        batchIndex++
-                        batchDialog?.setMessage("${batchIndex}/${batchGroups.size} 처리 완료")
-                        processNextBatchFile()
-                    } else {
-                        showToast("AI 데이터 반영 완료")
-                    }
-                }
-            }
-            override fun onError(error: String) {
-                if (aiExtractCancelled) return
-                runOnUiThread {
-                    if (retryCount < maxRetry) {
-                        Log.w("AI_EXTRACT", "AI 추출 실패 (${retryCount + 1}/${maxRetry + 1}): $error → 재시도")
-                        extractDataWithAI(text, retryCount + 1)
-                    } else {
-                        loadingDialog?.dismiss()
-                        // AI 실패해도 HWP 데이터만으로 결과 표시
-                        if (hwpText.isNotEmpty()) parseHwpData(hwpText)
-                        if (batchMode) {
-                            val groupName = batchGroups[batchIndex].baseName
-                            val pdfInfo = if (batchGroups[batchIndex].pdfUris.isNotEmpty()) " (+PDF)" else ""
-                            batchResults.add("===== ${batchIndex + 1}/${batchGroups.size} =====\n[파일] $groupName$pdfInfo\n[주의] AI 추출 실패\n${buildResultText()}")
-                            batchIndex++
-                            batchDialog?.setMessage("${batchIndex}/${batchGroups.size} 처리 완료")
-                            processNextBatchFile()
-                        } else {
-                            showToast("AI 추출 실패 - HWP 데이터만 표시")
-                        }
-                    }
-                }
-            }
-        })
-    }
 }

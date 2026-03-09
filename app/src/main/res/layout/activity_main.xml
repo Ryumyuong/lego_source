@@ -1,99 +1,202 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:background="#FFFFFF"
     android:layout_width="match_parent"
-    android:background="#e5e5e5"
-    android:fillViewport="true"
-    android:layout_height="match_parent">
-    <LinearLayout
-        android:orientation="vertical"
-        android:background="#e5e5e5"
-        android:padding="20dp"
-        android:gravity="center"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true">
+
+    <!-- Clipboard area -->
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content">
-        <ImageView
-            android:background="@drawable/head"
-            android:layout_width="match_parent"
-            android:layout_height="150dp"
-            android:layout_marginBottom="20dp"/>
-        <Button
-            android:id="@+id/buttonBatchDiagnosis"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="10dp"
-            android:text="배치 진단"
-            android:backgroundTint="#ff9800"/>
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp">
+
+        <!-- Clipboard board with blue border -->
         <LinearLayout
             android:orientation="vertical"
-            android:background="@drawable/actions"
-            android:padding="20dp"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content">
-            <TextView
-                android:textSize="15sp"
-                android:textColor="#000000"
-                android:id="@+id/name"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"/>
-            <TextView
-                android:textSize="15sp"
-                android:textColor="#000000"
-                android:id="@+id/card"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
-            <TextView
-                android:textSize="15sp"
-                android:textColor="#000000"
-                android:id="@+id/dat"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
-            <TextView
-                android:textSize="15sp"
-                android:textColor="#000000"
-                android:id="@+id/money"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"/>
-            <TextView
-                android:textSize="15sp"
-                android:textColor="#000000"
-                android:id="@+id/use"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"/>
-            <TextView
-                android:textSize="15sp"
-                android:textColor="#000000"
-                android:id="@+id/test1"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
-            <TextView
-                android:textSize="15sp"
-                android:textColor="#000000"
-                android:id="@+id/test2"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
-            <TextView
-                android:textSize="15sp"
-                android:textColor="#000000"
-                android:id="@+id/half"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"/>
-            <TextView
-                android:textSize="15sp"
-                android:textColor="#000000"
-                android:id="@+id/testing"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"/>
+            android:layout_height="match_parent"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/clipboard_background"
+            android:padding="16dp">
+
+            <ScrollView
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:fillViewport="true">
+
+                <LinearLayout
+                    android:orientation="vertical"
+                    android:background="#FFFFFF"
+                    android:padding="16dp"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <TextView
+                        android:textSize="15sp"
+                        android:textColor="#000000"
+                        android:id="@+id/name"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="10dp" />
+                    <TextView
+                        android:textSize="15sp"
+                        android:textColor="#000000"
+                        android:id="@+id/card"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" />
+                    <TextView
+                        android:textSize="15sp"
+                        android:textColor="#000000"
+                        android:id="@+id/dat"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" />
+                    <TextView
+                        android:textSize="15sp"
+                        android:textColor="#000000"
+                        android:id="@+id/money"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="10dp" />
+                    <TextView
+                        android:textSize="15sp"
+                        android:textColor="#000000"
+                        android:id="@+id/use"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="10dp" />
+                    <TextView
+                        android:textSize="15sp"
+                        android:textColor="#000000"
+                        android:id="@+id/test1"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" />
+                    <TextView
+                        android:textSize="15sp"
+                        android:textColor="#000000"
+                        android:id="@+id/test2"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" />
+                    <TextView
+                        android:textSize="15sp"
+                        android:textColor="#000000"
+                        android:id="@+id/half"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="10dp" />
+                    <TextView
+                        android:textSize="15sp"
+                        android:textColor="#000000"
+                        android:id="@+id/testing"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="10dp" />
+
+                </LinearLayout>
+            </ScrollView>
         </LinearLayout>
-        <Button
-            android:id="@+id/copy"
-            android:layout_width="match_parent"
+
+        <!-- Clipboard clip at top center -->
+        <View
+            android:layout_width="80dp"
+            android:layout_height="28dp"
+            android:layout_gravity="top|center_horizontal"
+            android:background="@drawable/clipboard_clip" />
+
+    </FrameLayout>
+
+    <!-- Bottom buttons - icons with text below -->
+    <LinearLayout
+        android:orientation="horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="8dp">
+
+        <!-- 거래처 진단 -->
+        <LinearLayout
+            android:id="@+id/buttonClientDiagnosis"
+            android:orientation="vertical"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:text="복사하기"
-            android:backgroundTint="#03a9f4"/>
+            android:layout_weight="1"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true">
+
+            <ImageView
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:layout_marginBottom="6dp"
+                android:src="@drawable/load_image"
+                android:scaleType="fitCenter" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="거래처 진단"
+                android:textColor="#333333"
+                android:textSize="15sp" />
+        </LinearLayout>
+
+        <!-- 레고 진단 -->
+        <LinearLayout
+            android:id="@+id/buttonLegoDiagnosis"
+            android:orientation="vertical"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true">
+
+            <ImageView
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:layout_marginBottom="6dp"
+                android:src="@drawable/load_image"
+                android:scaleType="fitCenter" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="레고 진단"
+                android:textColor="#333333"
+                android:textSize="15sp" />
+        </LinearLayout>
+
+        <!-- 복사하기 -->
+        <LinearLayout
+            android:id="@+id/copy"
+            android:orientation="vertical"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true">
+
+            <ImageView
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:layout_marginBottom="6dp"
+                android:src="@drawable/copy_image"
+                android:scaleType="fitCenter" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="복사하기"
+                android:textColor="#333333"
+                android:textSize="15sp" />
+        </LinearLayout>
     </LinearLayout>
-</ScrollView>
+
+</LinearLayout>

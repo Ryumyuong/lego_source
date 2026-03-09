@@ -59,6 +59,40 @@ object AffiliateList {
         'U' to "유", 'V' to "브이", 'W' to "더블유", 'X' to "엑스", 'Y' to "와이", 'Z' to "지"
     )
 
+    // OCR 중복 음절 제거: "오케이케이에프" → "오케이에프" (Gemini가 음절을 반복 인식하는 경우 대응)
+    private fun removeConsecutiveDupSyllables(text: String): String {
+        var result = text
+        // 3음절 반복 제거: ABCABC → ABC
+        result = Regex("(.{3})\\1").replace(result, "$1")
+        // 2음절 반복 제거: ABAB → AB
+        result = Regex("(.{2})\\1").replace(result, "$1")
+        // 1음절 반복 제거: AA → A
+        result = Regex("(.)\\1").replace(result, "$1")
+        return result
+    }
+
+    // fuzzy substring: haystack 안에 needle이 최대 allowSkip개 문자를 건너뛰며 포함되는지 확인
+    private fun fuzzyContains(haystack: String, needle: String, allowSkip: Int = 2): Boolean {
+        if (needle.length < 5) return false
+        if (haystack.contains(needle)) return true
+        for (start in 0..haystack.length - needle.length) {
+            var hi = start
+            var ni = 0
+            var skipped = 0
+            while (hi < haystack.length && ni < needle.length && skipped <= allowSkip) {
+                if (haystack[hi] == needle[ni]) {
+                    hi++
+                    ni++
+                } else {
+                    hi++
+                    skipped++
+                }
+            }
+            if (ni == needle.length) return true
+        }
+        return false
+    }
+
     // ㅐ와 ㅔ를 동일하게 처리 (한글 음절 분해 → ㅐ(중성1)를 ㅔ(중성5)로 통일 → 재조합)
     private fun normalizeAeE(text: String): String {
         val sb = StringBuilder()
@@ -77,7 +111,7 @@ object AffiliateList {
         return sb.toString()
     }
 
-    private fun convertEnglishToKorean(name: String): String {
+    fun convertEnglishToKorean(name: String): String {
         val sb = StringBuilder()
         for (ch in name) {
             // 전각 영문자(Ａ-Ｚ, ａ-ｚ)를 반각(A-Z, a-z)으로 변환
@@ -109,6 +143,7 @@ object AffiliateList {
         }
         val normalizedName = creditorName
             .replace(Regex("\\[.*?\\]"), "") // 지점명 제거: [본점], [신장림역] 등
+            .replace(Regex("\\(주\\)|\\(유\\)|주식회사|유한회사|유한책임회사"), "") // 법인형태 제거
             .replace(Regex("[\\s\\(\\)]"), "")
             .map { ch -> when (ch) {
                 in '\uFF10'..'\uFF19' -> (ch - 0xFEE0).toChar() // ０~９ → 0~9
@@ -122,23 +157,23 @@ object AffiliateList {
         val normName = normalizeAeE(normalizedName)
         val normKorean = normalizeAeE(koreanName)
 
-        // 0. 특정 키워드 포함 시 무조건 협약채권
-        if (normName.contains("신용보") || normKorean.contains("신용보")) return true
-        if (normName.contains("신용정보") || normKorean.contains("신용정보")) return true
-        if (normName.contains("통신") || normKorean.contains("통신") ||
-            normName.contains("텔레콤") || normKorean.contains("텔레콤") ||
-            normName.contains("유플러스") || normKorean.contains("유플러스") ||
-            normName.contains("모바일") || normKorean.contains("모바일")) return true
-        if (normName.contains("새출발기금") || normKorean.contains("새출발기금")) return true
-        if (normName.contains("신용회복위원회") || normKorean.contains("신용회복위원회")) return true
-        if (normName.contains("신복위") || normKorean.contains("신복위")) return true
-        if (normName.contains("신복") || normKorean.contains("신복")) return true
-        if (normName.contains("캠코") || normKorean.contains("캠코")) return true
-        if (normName.contains("신협") || normKorean.contains("신협")) return true
-        if (normName.contains("농협") || normKorean.contains("농협") || normName.contains("농업협동조합") || normKorean.contains("농업협동조합")) return true
-        if (normName.contains("수협") || normKorean.contains("수협")) return true
-        if (normName.contains("대구은행") || normKorean.contains("대구은행")) return true
-        if (normName.contains("상호") || normKorean.contains("상호")) return true
+        // 0. 특정 키워드 포함 시 무조건 협약채권 (normalizedName 사용 - normalizeAeE 변환 전)
+        if (normalizedName.contains("신용보") || koreanName.contains("신용보")) return true
+        if (normalizedName.contains("신용정보") || koreanName.contains("신용정보")) return true
+        if (normalizedName.contains("통신") || koreanName.contains("통신") ||
+            normalizedName.contains("텔레콤") || koreanName.contains("텔레콤") ||
+            normalizedName.contains("유플러스") || koreanName.contains("유플러스") ||
+            normalizedName.contains("모바일") || koreanName.contains("모바일")) return true
+        if (normalizedName.contains("새출발기금") || koreanName.contains("새출발기금")) return true
+        if (normalizedName.contains("신용회복위원회") || koreanName.contains("신용회복위원회")) return true
+        if (normalizedName.contains("신복위") || koreanName.contains("신복위")) return true
+        if (normalizedName.contains("신복") || koreanName.contains("신복")) return true
+        if (normalizedName.contains("캠코") || koreanName.contains("캠코")) return true
+        if (normalizedName.contains("신협") || koreanName.contains("신협")) return true
+        if (normalizedName.contains("농협") || koreanName.contains("농협") || normalizedName.contains("농업협동조합") || koreanName.contains("농업협동조합")) return true
+        if (normalizedName.contains("수협") || koreanName.contains("수협")) return true
+        if (normalizedName.contains("대구은행") || koreanName.contains("대구은행")) return true
+        if (normalizedName.contains("상호") || koreanName.contains("상호")) return true
 
         // 1. 정확히 일치하는지 확인
         if (keywords.any { normalizeAeE(it) == normName }) return true
@@ -147,9 +182,20 @@ object AffiliateList {
 
         // 2. 채권자명이 키워드를 포함하는지 확인 (긴 키워드부터)
         val sortedKeywords = keywords.filter { it.length >= 3 }.sortedByDescending { it.length }
+        val dedupName = removeConsecutiveDupSyllables(normName)
+        val dedupKorean = removeConsecutiveDupSyllables(normKorean)
         for (keyword in sortedKeywords) {
             val normKeyword = normalizeAeE(keyword)
             if (normName.contains(normKeyword) || normalizeAeE(creditorName).contains(normKeyword) || normKorean.contains(normKeyword)) {
+                return true
+            }
+            // OCR 중복 음절 대응: 중복 제거 후 재비교
+            val dedupKeyword = removeConsecutiveDupSyllables(normKeyword)
+            if (dedupName.contains(dedupKeyword) || dedupKorean.contains(dedupKeyword)) {
+                return true
+            }
+            // OCR 오타 대응: 최대 2글자 삽입 허용 fuzzy 매칭 (키워드 5자 이상만)
+            if (fuzzyContains(normName, normKeyword) || fuzzyContains(normKorean, normKeyword)) {
                 return true
             }
         }
