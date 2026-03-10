@@ -4102,8 +4102,8 @@ class MainActivity : AppCompatActivity() {
         val effectiveShortTermBlocked = shortTermBlocked && !shortTermCarSaleApplied
         val shortTermBlockedByDischarge = effectiveShortTermBlocked && dischargeWithin5Years
         val lowIncome = parsedMonthlyIncome <= 100  // 소득 100만 이하 → 회생 불가
-        val hoeBlocked = shortTermBlockedByDischarge || shortTermDebtOverLimit || hasHfcMortgage || lowIncome  // 회(개인회생) 불가: 면책 or 채무한도초과 or 한국주택금융공사 or 소득100만이하
-        Log.d("HWP_CALC", "회불가 판단: hoeBlocked=$hoeBlocked (면책단기=${shortTermBlockedByDischarge}, 채무한도=${shortTermDebtOverLimit}, 한국주택=${hasHfcMortgage}, 소득100이하=$lowIncome)")
+        val hoeBlocked = shortTermBlockedByDischarge || shortTermDebtOverLimit || hasHfcMortgage || lowIncome || spouseSecret  // 회(개인회생) 불가: 면책 or 채무한도초과 or 한국주택금융공사 or 소득100만이하 or 배우자모르게
+        Log.d("HWP_CALC", "회불가 판단: hoeBlocked=$hoeBlocked (면책단기=${shortTermBlockedByDischarge}, 채무한도=${shortTermDebtOverLimit}, 한국주택=${hasHfcMortgage}, 소득100이하=$lowIncome, 배우자모르게=$spouseSecret)")
         // 새새 연체 분기: 90일 이상 회새/새, 나머지 새새 (연체 없으면 회새 아님)
         val saeDiagnosis = when {
             actualDelinquentDays >= 90 || delinquentDays >= 90 -> if (hoeBlocked) "새" else "회새"
@@ -4112,7 +4112,7 @@ class MainActivity : AppCompatActivity() {
 
         val diagnosisAfterCarSale = when {
             !canLongTermAfterCarSale -> ""
-            delinquentDays >= 90 -> if (dischargeWithin5Years) "워유워" else "회워"
+            delinquentDays >= 90 -> if (dischargeWithin5Years || hasHfcMortgage) "워유워" else "회워"
             delinquentDays >= 30 -> if (hoeBlocked) "프유워" else "프회워"
             else -> if (hoeBlocked) "신유워" else "신회워"
         }
@@ -4151,7 +4151,7 @@ class MainActivity : AppCompatActivity() {
             } else if (isRegistrySplit && !longTermPropertyExcess) {
                 // 등본 분리시 재산초과 해소 → 장기 가능
                 diagnosis = when {
-                    delinquentDays >= 90 -> if (dischargeWithin5Years) "워유워" else "회워"
+                    delinquentDays >= 90 -> if (dischargeWithin5Years || hasHfcMortgage) "워유워" else "회워"
                     delinquentDays >= 30 -> if (hoeBlocked) "프유워" else "프회워"
                     else -> if (hoeBlocked) "신유워" else "신회워"
                 }
@@ -4188,7 +4188,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 } else {
                     when {
-                        delinquentDays >= 90 -> if (dischargeWithin5Years) "워유워" else "회워"
+                        delinquentDays >= 90 -> if (dischargeWithin5Years || hasHfcMortgage) "워유워" else "회워"
                         delinquentDays >= 30 -> "프유워"
                         else -> "신유워"
                     }
@@ -4199,7 +4199,7 @@ class MainActivity : AppCompatActivity() {
                 isBangsaeng -> "방생"
                 !effectiveShortTermBlocked -> "회워"
                 else -> when {
-                    delinquentDays >= 90 -> if (dischargeWithin5Years) "워유워" else "회워"
+                    delinquentDays >= 90 -> if (dischargeWithin5Years || hasHfcMortgage) "워유워" else "회워"
                     delinquentDays >= 30 -> if (hoeBlocked) "프유워" else "프회워"
                     else -> if (hoeBlocked) "신유워" else "신회워"
                 }
@@ -4210,7 +4210,7 @@ class MainActivity : AppCompatActivity() {
                 !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && effectiveAggressiveTotal - shortTermTotal > 1000 -> "단순유리"
                 !effectiveShortTermBlocked -> "회워"
                 else -> when {
-                    delinquentDays >= 90 -> if (dischargeWithin5Years) "워유워" else "회워"
+                    delinquentDays >= 90 -> if (dischargeWithin5Years || hasHfcMortgage) "워유워" else "회워"
                     delinquentDays >= 30 -> if (hoeBlocked) "프유워" else "프회워"
                     else -> if (hoeBlocked) "신유워" else "신회워"
                 }
@@ -4221,7 +4221,7 @@ class MainActivity : AppCompatActivity() {
                 !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && effectiveAggressiveTotal - shortTermTotal > 1000 -> "단순유리"
                 !effectiveShortTermBlocked -> "회워"
                 else -> when {
-                    delinquentDays >= 90 -> if (dischargeWithin5Years) "워유워" else "회워"
+                    delinquentDays >= 90 -> if (dischargeWithin5Years || hasHfcMortgage) "워유워" else "회워"
                     delinquentDays >= 30 -> if (hoeBlocked) "프유워" else "프회워"
                     else -> if (hoeBlocked) "신유워" else "신회워"
                 }
@@ -4316,7 +4316,7 @@ class MainActivity : AppCompatActivity() {
                         diagnosis  // 새출발 진단명 유지 (새새/회새/새)
                     } else when {
                         hoeBlocked || effectiveShortTermBlocked -> when {
-                            delinquentDays >= 90 -> if (dischargeWithin5Years) "워유워" else "회워"
+                            delinquentDays >= 90 -> if (dischargeWithin5Years || hasHfcMortgage) "워유워" else "회워"
                             delinquentDays >= 30 -> "프유워"
                             else -> "신유워"
                         }
@@ -4355,11 +4355,13 @@ class MainActivity : AppCompatActivity() {
         if (diagnosis.startsWith("단순") && !longTermFullyBlocked && finalYear > 0
             && !(diagnosis == "단순유리" && !practicalShortTermBlocked && shortTermTotal > 0 && effectiveAggressiveTotal - shortTermTotal > 1000)) {
             // 면책 5년 이내 또는 배우자 모르게 등 실질 단기 불가 → 장기 진단 기반
-            // 단, 대상채무 4000만 이하면 회생도 가능 (유→회)
-            val useYu = dischargeWithin5Years || (practicalShortTermBlocked && targetDebt > 4000)
+            // 단, 대상채무 4000만 이하면 회생도 가능 (유→회), hoeBlocked는 중간 회 불가
+            // 면책5년이내/한국주택금융공사는 회생접수 자체 불가 → 회워도 불가
+            val hoeFullyBlocked = dischargeWithin5Years || hasHfcMortgage  // 회생 접수 자체 불가
+            val useYu = hoeFullyBlocked || hoeBlocked || (isIncomeEstimated && targetDebt > 4000)
             diagnosis = if (dischargeWithin5Years || practicalShortTermBlocked) {
                 when {
-                    delinquentDays >= 90 -> if (dischargeWithin5Years) "워유워" else "회워"
+                    delinquentDays >= 90 -> if (hoeFullyBlocked) "워유워" else "회워"
                     delinquentDays >= 30 -> if (useYu) "프유워" else "프회워"
                     else -> if (useYu) "신유워" else "신회워"
                 }
