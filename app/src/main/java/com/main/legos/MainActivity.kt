@@ -3732,10 +3732,10 @@ class MainActivity : AppCompatActivity() {
         if (targetDebt > 0 && roundedLongTermMonthly > 0) {
             val aggressiveMonthly = Math.ceil(roundedLongTermMonthly * 2.0 / 3.0).toInt()
             roundedAggressiveMonthly = aggressiveMonthly
-            if (roundedAggressiveMonthly < 45) roundedAggressiveMonthly = roundedLongTermMonthly
+            if (roundedAggressiveMonthly < 45) roundedAggressiveMonthly = 45
 
-            // 공격 년수: 총변제금 ÷ 공격 월변제금 ÷ 12
-            aggressiveYears = Math.ceil(totalPayment.toDouble() / roundedAggressiveMonthly / 12.0).toInt()
+            // 공격 년수: 총변제금 ÷ 공격 월변제금 ÷ 12 (내림: 올림 시 총변제금 초과 방지)
+            aggressiveYears = (totalPayment.toDouble() / roundedAggressiveMonthly / 12.0).toInt()
             if (aggressiveYears > 10) {
                 // 10년 초과 시: 총변제금 ÷ 120 = 공격 월변제금
                 roundedAggressiveMonthly = Math.ceil(totalPayment.toDouble() / 120).toInt()
@@ -3777,13 +3777,13 @@ class MainActivity : AppCompatActivity() {
                 else -> 10
             }
             saeMonthly = saeTotalPayment / (saeYears * 12)
-            if (saeMonthly <= 40) {
-                saeMonthly = 40
-                val exactYears = saeTotalPayment.toDouble() / 40 / 12.0
+            if (saeMonthly < 45) {
+                saeMonthly = 45
+                val exactYears = saeTotalPayment.toDouble() / 45 / 12.0
                 saeYears = if (exactYears - Math.floor(exactYears) >= 0.35) Math.ceil(exactYears).toInt() else Math.floor(exactYears).toInt()
                 saeYears = saeYears.coerceIn(1, 10)
                 saeTotalPayment = saeMonthly * saeYears * 12
-                Log.d("HWP_CALC", "새새: 총변제=${saeTotalPayment}만, 월변제금 40만 이하 → 40만 고정, ${saeYears}년")
+                Log.d("HWP_CALC", "새새: 총변제=${saeTotalPayment}만, 월변제금 45만 미만 → 45만 고정, ${saeYears}년")
             } else {
                 saeTotalPayment = saeMonthly * saeYears * 12
                 Log.d("HWP_CALC", "새새: 총변제=${saeTotalPayment}만, 소득비율=${String.format("%.1f", incomeRatio)}%, ${saeMonthly}만/${saeYears}년")
