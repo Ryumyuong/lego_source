@@ -1376,6 +1376,7 @@ class MainActivity : AppCompatActivity() {
         var businessStartYear = 0
         var businessStartMonth = 0
         var businessEndYear = 0
+        var hasDebtDuringBusiness = false  // 개업~폐업 기간 중 채무 존재 여부
 
         // 보조 정보 (텍스트에서 파싱)
         var name = ""
@@ -2802,6 +2803,7 @@ class MainActivity : AppCompatActivity() {
                         } else {
                             debtDateAmountSeen[dateAmountKey] = isGuaranteeDebt
                             totalParsedDebt += (debtAmount + 5) / 10
+                            if (loanYear in 2020..2025 && businessStartYear > 0 && loanYear >= businessStartYear && (businessEndYear == 0 || loanYear <= businessEndYear)) hasDebtDuringBusiness = true
 
                             // 6개월 이내 채무 수집 (담보 포함 모든 채무)
                             val loanCal = Calendar.getInstance().apply {
@@ -3757,8 +3759,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
         val saeDebtOverLimit = totalSecuredDebt > 100000 || totalUnsecuredDebt > 50000  // 새새: 담보10억/무담보5억
-        val canApplySae = hasBusinessHistory && !(isFreelancer && !isBusinessOwner) && !isNonProfit && !isCorporateBusiness && !saeDebtOverLimit
-        Log.d("HWP_CALC", "새새 조건: 사업이력=$hasBusinessHistory(AI), 실제연체=${actualDelinquentDays}일(전체=${delinquentDays}일), 프리랜서=$isFreelancer, 사업자=$isBusinessOwner, 비영리=$isNonProfit, 법인=$isCorporateBusiness, 개업=${businessStartYear}년${if (businessStartMonth > 0) "${businessStartMonth}월" else ""}, 폐업=$businessEndYear, 채무한도초과=$saeDebtOverLimit(담보=${totalSecuredDebt}만,무담보=${totalUnsecuredDebt}만)")
+        val noDebtDuringBusiness = businessEndYear > 0 && !hasDebtDuringBusiness  // 폐업했는데 사업기간 중 채무 없음 → 사업무관
+        val canApplySae = hasBusinessHistory && !(isFreelancer && !isBusinessOwner) && !isNonProfit && !isCorporateBusiness && !saeDebtOverLimit && !noDebtDuringBusiness
+        Log.d("HWP_CALC", "새새 조건: 사업이력=$hasBusinessHistory(AI), 실제연체=${actualDelinquentDays}일(전체=${delinquentDays}일), 프리랜서=$isFreelancer, 사업자=$isBusinessOwner, 비영리=$isNonProfit, 법인=$isCorporateBusiness, 개업=${businessStartYear}년${if (businessStartMonth > 0) "${businessStartMonth}월" else ""}, 폐업=$businessEndYear, 사업중채무=$hasDebtDuringBusiness, 채무한도초과=$saeDebtOverLimit(담보=${totalSecuredDebt}만,무담보=${totalUnsecuredDebt}만)")
         var saeTotalPayment = 0; var saeMonthly = 0; var saeYears = 0
         if (canApplySae && targetDebt > 0) {
             saeTotalPayment = if (netProperty > targetDebt / 2) {
@@ -4197,7 +4200,7 @@ class MainActivity : AppCompatActivity() {
         } else if (hasShinbokwiHistory) {
             diagnosis = when {
                 isBangsaeng -> "방생"
-                !effectiveShortTermBlocked -> "회워"
+                !effectiveShortTermBlocked -> if (dischargeWithin5Years || hasHfcMortgage) "워유워" else "회워"
                 else -> when {
                     delinquentDays >= 90 -> if (dischargeWithin5Years || hasHfcMortgage) "워유워" else "회워"
                     delinquentDays >= 30 -> if (hoeBlocked) "프유워" else "프회워"
@@ -4208,7 +4211,7 @@ class MainActivity : AppCompatActivity() {
             diagnosis = when {
                 isBangsaeng -> "방생"
                 !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && effectiveAggressiveTotal - shortTermTotal > 1000 -> "단순유리"
-                !effectiveShortTermBlocked -> "회워"
+                !effectiveShortTermBlocked -> if (dischargeWithin5Years || hasHfcMortgage) "워유워" else "회워"
                 else -> when {
                     delinquentDays >= 90 -> if (dischargeWithin5Years || hasHfcMortgage) "워유워" else "회워"
                     delinquentDays >= 30 -> if (hoeBlocked) "프유워" else "프회워"
@@ -4219,7 +4222,7 @@ class MainActivity : AppCompatActivity() {
             diagnosis = when {
                 isBangsaeng -> "방생"
                 !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && effectiveAggressiveTotal - shortTermTotal > 1000 -> "단순유리"
-                !effectiveShortTermBlocked -> "회워"
+                !effectiveShortTermBlocked -> if (dischargeWithin5Years || hasHfcMortgage) "워유워" else "회워"
                 else -> when {
                     delinquentDays >= 90 -> if (dischargeWithin5Years || hasHfcMortgage) "워유워" else "회워"
                     delinquentDays >= 30 -> if (hoeBlocked) "프유워" else "프회워"
@@ -4231,26 +4234,26 @@ class MainActivity : AppCompatActivity() {
                 isBangsaeng -> "방생"
                 hasWorkoutExpired && !longTermDebtOverLimit -> "단순워크"
                 !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && effectiveAggressiveTotal - shortTermTotal > 1000 -> "단순유리"
-                !effectiveShortTermBlocked && !longTermPropertyExcess -> "회워"
-                dischargeWithin5Years -> "워유워"
+                !effectiveShortTermBlocked && !longTermPropertyExcess -> if (dischargeWithin5Years || hasHfcMortgage) "워유워" else "회워"
+                dischargeWithin5Years || hasHfcMortgage -> "워유워"
                 else -> "회워"
             }
         } else if (delinquentDays >= 30) {
             diagnosis = when {
                 isBangsaeng -> "방생"
                 !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && effectiveAggressiveTotal - shortTermTotal > 1000 -> "단순유리"
-                recentDebtRatio >= 30 && !effectiveShortTermBlocked -> "프회워"
+                recentDebtRatio >= 30 && !effectiveShortTermBlocked -> if (hoeBlocked) "프유워" else "프회워"
                 targetDebt <= 4000 && !effectiveShortTermBlocked -> "프유워"
-                !effectiveShortTermBlocked -> "프회워"
+                !effectiveShortTermBlocked -> if (hoeBlocked) "프유워" else "프회워"
                 else -> if (hoeBlocked) "프유워" else "프회워"
             }
         } else {
             diagnosis = when {
                 isBangsaeng -> "방생"
                 !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && effectiveAggressiveTotal - shortTermTotal > 1000 -> "단순유리"
-                recentDebtRatio >= 30 && !effectiveShortTermBlocked -> "신회워"
+                recentDebtRatio >= 30 && !effectiveShortTermBlocked -> if (hoeBlocked) "신유워" else "신회워"
                 targetDebt <= 4000 && !effectiveShortTermBlocked -> "신유워"
-                !effectiveShortTermBlocked -> "신회워"
+                !effectiveShortTermBlocked -> if (hoeBlocked) "신유워" else "신회워"
                 else -> if (hoeBlocked) "신유워" else "신회워"
             }
         }
