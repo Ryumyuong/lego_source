@@ -4442,7 +4442,14 @@ class MainActivity : AppCompatActivity() {
                         ""
                     }
                     val carDisposalNote = if (canAfterCarDisposal) ", 차량 처분 후 바로 가능" else ""
-                    diagnosis = "$immediatePrefix$afterDiag $possibleDate 이후 가능$immediateNote$carDisposalNote"
+                    // 이후 가능/바로 가능 양쪽 진단이 같으면 조건 제거 (둘 다 회워면 그냥 회워)
+                    val immCore = immediateNote.replace(",", "").replace("바로 가능", "").replace("구직 이후 가능", "").trim()
+                    val prefCore = immediatePrefix.replace(",", "").replace("바로 가능", "").replace("구직 이후 가능", "").trim()
+                    if (afterDiag.isNotEmpty() && (immCore == afterDiag || prefCore == afterDiag)) {
+                        diagnosis = afterDiag
+                    } else {
+                        diagnosis = "$immediatePrefix$afterDiag $possibleDate 이후 가능$immediateNote$carDisposalNote"
+                    }
                     diagnosisNote = ""
                     Log.d("HWP_CALC", "6개월 30%미만 가능일: $possibleDate (남은 ${remainingMan}만/${targetDebt}만=${String.format("%.1f", newRatio)}%)")
                     break
