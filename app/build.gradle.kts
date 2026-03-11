@@ -18,11 +18,11 @@ android {
         applicationId = "com.main.legos"
         minSdk = 26
         targetSdk = 36
-        versionCode = 13
-        versionName = "2.3"
+        versionCode = 15
+        versionName = "2.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "GEMINI_API_KEY", "\"${localProperties.getProperty("GEMINI_API_KEY", "")}\"")
+        buildConfigField("String", "CLAUDE_API_KEY", "\"${localProperties.getProperty("CLAUDE_API_KEY", "")}\"")
     }
 
     buildTypes {
