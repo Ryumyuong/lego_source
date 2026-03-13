@@ -3981,7 +3981,7 @@ class MainActivity : AppCompatActivity() {
         if (hasAuction) specialNotesList.add("경매진행중")
         if (hasSeizure) specialNotesList.add("압류진행중")
         if (delinquentDays >= 90) specialNotesList.add("장기연체자")
-        if (rateReason == "지급보증/대부 과반") specialNotesList.add("지급보증/대부 과반")
+        if (guaranteeDaebuRatio > 50) specialNotesList.add("지급보증/대부 과반")
         if (hasCivilCase) specialNotesList.add("민사 소송금 따로 변제")
         if (hasUsedCarInstallment) specialNotesList.add("중고차 할부 따로 납부")
         if (hasHealthInsuranceDebt) specialNotesList.add("건강보험 체납 따로 변제")
