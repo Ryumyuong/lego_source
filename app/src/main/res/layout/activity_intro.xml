@@ -5,60 +5,11 @@
     android:layout_height="match_parent"
     android:fitsSystemWindows="true">
 
-    <!-- Calculator image - replace @drawable/calculator with your actual image -->
     <ImageView
-        android:id="@+id/calculatorImage"
-        android:layout_width="220dp"
-        android:layout_height="220dp"
-        android:layout_centerHorizontal="true"
-        android:layout_marginTop="180dp"
-        android:scaleType="fitCenter"
-        android:src="@drawable/calculator" />
-
-    <TextView
-        android:id="@+id/titleText"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_below="@id/calculatorImage"
-        android:layout_centerHorizontal="true"
-        android:layout_marginTop="0dp"
-        android:gravity="center"
-        android:text="채무조정\n진단 AI"
-        android:textColor="#327CCE"
-        android:textSize="36sp"
-        android:textStyle="bold"
-        android:lineSpacingExtra="4dp" />
-
-    <!-- Bottom logos area -->
-    <LinearLayout
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_alignParentBottom="true"
-        android:layout_centerHorizontal="true"
-        android:layout_marginBottom="60dp"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
-
-        <ImageView
-            android:layout_width="80dp"
-            android:layout_height="80dp"
-            android:scaleType="fitCenter"
-            android:src="@drawable/lego_logo" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="16dp"
-            android:layout_marginEnd="16dp"
-            android:text="X"
-            android:textColor="#333333"
-            android:textSize="18sp" />
-
-        <ImageView
-            android:layout_width="100dp"
-            android:layout_height="50dp"
-            android:scaleType="fitCenter"
-            android:src="@drawable/samjung_logo" />
-    </LinearLayout>
+        android:id="@+id/introImage"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerInside"
+        android:src="@drawable/intro_normal" />
 
 </RelativeLayout>
