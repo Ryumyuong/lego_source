@@ -1473,6 +1473,7 @@ class MainActivity : AppCompatActivity() {
         val otherDebtEntries = mutableListOf<Pair<String, Int>>()  // 기타채무 실제 채권사 (이름, 금액만원)
         var childSupportReceiving = false  // 양육비 수급 (입금받음/양육O → 본인이 양육)
         var studentLoanTotal = 0   // 학자금 합계 (천원)
+        var studentLoanUnknown = false  // 한국장학재단 일반/취업후 구별 불가
         var tableDebtTotal = 0     // 표 전체 합계 (천원, 제외항목 포함)
         // 대출과목 파싱 (표 없을 때 대상채무 fallback)
         var inLoanCategorySection = false // 대출과목 섹션 진입 여부 (신복위 파싱 제외용)
@@ -1551,6 +1552,7 @@ class MainActivity : AppCompatActivity() {
 
         // ============= 사전 스캔: 대출과목 "차량담보" 등 순번 수집 (사이드바이사이드 테이블 대응) =============
         val studentLoanExcludedSeqs = mutableSetOf<Int>()  // 학자금 취업 후 상환 순번
+        val studentLoanGeneralSeqs = mutableSetOf<Int>()  // 학자금 일반 상환 순번
         var preScanLoanCat = false
         for (rawLine in lines) {
             val l = rawLine.trim().replace(Regex("\\s"), "")
@@ -1590,14 +1592,19 @@ class MainActivity : AppCompatActivity() {
                     Log.d("HWP_PRESCAN", "패턴기반 담보 순번: $seqNum (${damboM.group(0)}) - ${rawLine.trim()}")
                 }
             }
-            // 학자금 취업 후 상환 순번 수집
-            if (preScanLoanCat && l.contains("학자금") && l.contains("취업")) {
+            // 학자금 취업 후 상환 / 일반 상환 순번 수집
+            if (preScanLoanCat && l.contains("학자금")) {
                 val stuSeqM = Pattern.compile("(\\d{1,2})(?![억만원천년])[A-Za-z\uFF21-\uFF3A\uFF41-\uFF5A가-힣]").matcher(l)
                 while (stuSeqM.find()) {
                     val seqNum = stuSeqM.group(1)!!.toInt()
                     if (seqNum in 1..30) {
-                        studentLoanExcludedSeqs.add(seqNum)
-                        Log.d("HWP_PRESCAN", "학자금 취업후상환 순번: $seqNum - ${rawLine.trim()}")
+                        if (l.contains("취업")) {
+                            studentLoanExcludedSeqs.add(seqNum)
+                            Log.d("HWP_PRESCAN", "학자금 취업후상환 순번: $seqNum - ${rawLine.trim()}")
+                        } else {
+                            studentLoanGeneralSeqs.add(seqNum)
+                            Log.d("HWP_PRESCAN", "학자금 일반상환 순번: $seqNum - ${rawLine.trim()}")
+                        }
                     }
                 }
             }
@@ -1778,9 +1785,16 @@ class MainActivity : AppCompatActivity() {
                     val bojungAmt = maxOf(extractAmountAfterKeyword(line, "보증금"), extractAmountAfterKeyword(line, "전세"))
                     if (rawSise == null && bojungAmt > 0) rentalDeposit += bojungAmt
                     val siseAmt = rawSise ?: bojungAmt.takeIf { it > 0 } ?: 0
-                    var loanAmt = extractAmountAfterKeyword(line, "대출")
-                    // 배우자명의 대출 → ÷2
-                    if (lineNoSpace.contains("배우자명의대출")) loanAmt = loanAmt / 2
+                    // 본인명의 대출 + 배우자명의 대출 각각 추출
+                    var loanAmt = if (lineNoSpace.contains("본인명의") && lineNoSpace.contains("배우자명의")) {
+                        val ownLoan = extractAmountAfterKeyword(line, "본인명의 대출").takeIf { it > 0 }
+                            ?: extractAmountAfterKeyword(line, "본인명의대출")
+                        val spouseLoan = extractAmountAfterKeyword(line, "배우자명의 대출").takeIf { it > 0 }
+                            ?: extractAmountAfterKeyword(line, "배우자명의대출")
+                        ownLoan + spouseLoan
+                    } else {
+                        extractAmountAfterKeyword(line, "대출")
+                    }
                     val deductBojung = if (rawSise != null && rawSise > 0) bojungAmt else 0
                     val net = maxOf(siseAmt - loanAmt - deductBojung, 0)
                     when (lineOwnership) {
@@ -1869,10 +1883,15 @@ class MainActivity : AppCompatActivity() {
                         val siseAmt = rawSise
                             ?: bojungAmt.takeIf { it > 0 }
                             ?: extractAmount(g)
-                        var loanAmt = extractAmountAfterKeyword(g, "대출")
-                        // 배우자명의 대출 → ÷2 (배우자 재산 ÷2와 동일 원리)
-                        if (gNoSpace.contains("배우자명의대출")) {
-                            loanAmt = loanAmt / 2
+                        // 본인명의 대출 + 배우자명의 대출 각각 추출
+                        var loanAmt = if (gNoSpace.contains("본인명의") && gNoSpace.contains("배우자명의")) {
+                            val ownLoan = extractAmountAfterKeyword(g, "본인명의 대출").takeIf { it > 0 }
+                                ?: extractAmountAfterKeyword(g, "본인명의대출")
+                            val spouseLoan = extractAmountAfterKeyword(g, "배우자명의 대출").takeIf { it > 0 }
+                                ?: extractAmountAfterKeyword(g, "배우자명의대출")
+                            ownLoan + spouseLoan
+                        } else {
+                            extractAmountAfterKeyword(g, "대출")
                         }
                         val seipjaAmt = extractAmountAfterKeyword(g, "세입자")
                         // 시세가 있으면 보증금 차감, 보증금만 있으면 보증금이 재산가치 (세입자 있으면 중복차감 방지)
@@ -2701,7 +2720,7 @@ class MainActivity : AppCompatActivity() {
             val isDebtEntryLine = Pattern.compile("\\d{2}년\\s*\\d{1,2}월\\s*\\d{1,2}일").matcher(lineNoSpace).find()
             var isCarLine = !isDebtEntryLine && !inLoanCategorySection && (lineNoSpace.contains("차량") || (line.contains("자동차") && !lineNoSpace.contains("자동차금융") && !lineNoSpace.contains("자동차담보")) ||
                     (Pattern.compile("\\d{2}년").matcher(lineNoSpace).find() &&
-                            (lineNoSpace.contains("시세") || lineNoSpace.contains("본인명의") || lineNoSpace.contains("배우자명의"))))
+                            (lineNoSpace.contains("시세") || lineNoSpace.contains("본인명의") || lineNoSpace.contains("배우자명의") || lineNoSpace.contains("공동명의"))))
 
             // 부동산 관련 키워드가 포함되면 차량 아님 (지역 줄 오인식 방지)
             if (isCarLine && !lineNoSpace.contains("차량") && (lineNoSpace.contains("아파트") || lineNoSpace.contains("주택") ||
@@ -2779,7 +2798,8 @@ class MainActivity : AppCompatActivity() {
                 val monthlyM = Pattern.compile("월\\s*(\\d+)만").matcher(lineNoSpace)
                 var carMonthly = 0
                 if (monthlyM.find()) carMonthly = monthlyM.group(1)!!.toInt()
-                if (carSise == 0 && carLoan == 0 && carMonthly == 0) continue
+                val isJointCarLine = lineNoSpace.contains("공동명의") || (lineNoSpace.contains("공동") && !lineNoSpace.contains("공동인증"))
+                if (carSise == 0 && carLoan == 0 && carMonthly == 0 && !isJointCarLine) continue
 
                 // 2줄=1차량: 공동명의 차량의 이전 줄이 차량이고 현재 줄이 "("로 시작하면 이전 차량 값 업데이트
                 if (prevWasCarLine && carInfoList.isNotEmpty() && line.trim().startsWith("(") && hasJointCar) {
@@ -2791,7 +2811,7 @@ class MainActivity : AppCompatActivity() {
                     continue
                 }
 
-                val isJointCar = lineNoSpace.contains("공동명의") || (lineNoSpace.contains("공동") && !lineNoSpace.contains("공동인증"))
+                val isJointCar = isJointCarLine
                 // 공동명의 본인 지분율 계산 (배우자: 본인+배우자/2, 자녀/타인: 본인만)
                 var carJointRatio = 0  // 0=비공동, 1~100=본인 적용 비율(%)
                 if (isJointCar) {
@@ -2812,7 +2832,7 @@ class MainActivity : AppCompatActivity() {
                 carTotalSise += carSise; carTotalLoan += carLoan
                 carMonthlyPayment += carMonthly
                 // 차량명 추출: "년식" 뒤 한글 차명 우선, 없으면 "차량" 키워드 뒤
-                val carNameByYear = Regex("\\d{2}년식\\s*([가-힣]+)").find(lineNoSpace)
+                val carNameByYear = Regex("\\d{2}년식\\s*([가-힣a-zA-Zａ-ｚＡ-Ｚ0-9０-９]+)").find(lineNoSpace)
                 val carNameByKeyword = Regex("차량\\s*(.+?)\\s*(?:시세|담보|대출|할부|월|\\d{2}년식|본인|배우자|공동)").find(line)
                 val carName = carNameByYear?.groupValues?.get(1)?.trim()?.takeIf { it.length in 1..10 }
                     ?: carNameByKeyword?.groupValues?.get(1)?.trim()?.takeIf { it.length in 1..15 }
@@ -3072,12 +3092,18 @@ class MainActivity : AppCompatActivity() {
                             }
 
                             if (!isDamboLoan && hasFinancialKeyword) {
-                                // 학자금 합산: 취업 후 상환만 대상채무에서 제외, 일반 상환은 포함
+                                // 학자금 합산: 취업후상환→제외, 일반상환→포함, 구별불가→제외+특이
                                 if (lineNoSpace.contains("학자금") || lineNoSpace.contains("(150)") || lineNoSpace.contains("장학재단")) {
                                     val isAfterEmployment = (rowSeqNum > 0 && studentLoanExcludedSeqs.contains(rowSeqNum)) || lineNoSpace.contains("취업")
+                                    val isGeneral = (rowSeqNum > 0 && studentLoanGeneralSeqs.contains(rowSeqNum)) || lineNoSpace.contains("일반")
                                     if (isAfterEmployment) {
                                         studentLoanTotal += debtAmount
                                         Log.d("HWP_PARSE", "학자금 취업후상환 (제외대상): ${(debtAmount+5)/10}만 순번=$rowSeqNum - $line")
+                                    } else if (!isGeneral && lineNoSpace.contains("장학재단")) {
+                                        // 한국장학재단인데 일반/취업후 구별 불가 → 제외
+                                        studentLoanTotal += debtAmount
+                                        studentLoanUnknown = true
+                                        Log.d("HWP_PARSE", "학자금 구별불가 (제외+특이): ${(debtAmount+5)/10}만 순번=$rowSeqNum - $line")
                                     } else {
                                         Log.d("HWP_PARSE", "학자금 일반상환 (대상채무 포함): ${(debtAmount+5)/10}만 순번=$rowSeqNum - $line")
                                     }
@@ -3237,6 +3263,7 @@ class MainActivity : AppCompatActivity() {
         val studentLoanRatio = if (tableDebtMan > 0) studentLoanMan.toDouble() / tableDebtMan * 100 else 0.0
         if (studentLoanMan > 0) {
             if (studentLoanRatio >= 50) specialNotesList.add("학자금 많음")
+            if (studentLoanUnknown) specialNotesList.add("한국장학재단 채무제외")
             Log.d("HWP_CALC", "학자금: ${studentLoanMan}만 / 표전체${tableDebtMan}만 = ${String.format("%.1f", studentLoanRatio)}%")
         }
 
@@ -3570,41 +3597,34 @@ class MainActivity : AppCompatActivity() {
         // 한국자산관리공사(캠코) 보유 여부
         val hasKamco = parsedCreditorMap.keys.any { it.contains("자산관리공사") || it.contains("캠코") } ||
                 parsedDamboCreditorNames.any { it.contains("자산관리공사") || it.contains("캠코") }
-        if (hasKamco) Log.d("HWP_CALC", "한국자산관리공사(캠코) 채권 보유 감지")
+        if (hasKamco) {
+            Log.d("HWP_CALC", "한국자산관리공사(캠코) 채권 보유 감지")
+            specialNotesList.add("한국자산관리공사 채권보유")
+        }
 
         // 6개월 비율: 6개월 이내 채무 / 전체 채무 (처분 전 대상채무 + 담보대출)
         val totalDebtForRatio = maxOf(totalParsedDebt, targetDebtBeforeDisposal + parsedDamboTotal)
         recentDebtRatio = if (totalDebtForRatio > 0 && recentDebtMan > 0) recentDebtMan.toDouble() / totalDebtForRatio * 100 else 0.0
 
-        // ★ 미협약 비율: 처분 반영된 대상채무 + 미협약 포함 기준
+        // ★ 미협약 비율: 대상채무 미협약 + 담보 미협약 합산
         val originalTargetDebt = targetDebt
+        val totalDamboNonAff = if (nonAffDamboNames.isNotEmpty()) nonAffDamboNames.distinct().sumOf { parsedDamboCreditorMap[it] ?: 0 } else 0
+        val totalNonAffDebt = nonAffiliatedDebt + totalDamboNonAff
+        val allNonAffNames = (nonAffNames + nonAffDamboNames.distinct()).distinct()
         val nonAffiliatedOver20: Boolean
-        if (nonAffiliatedDebt > 0) {
+        if (totalNonAffDebt > 0) {
             val totalDebtAll = targetDebt + nonAffiliatedDebt + parsedDamboTotal
-            val nonAffiliatedRatio = if (totalDebtAll > 0) nonAffiliatedDebt.toDouble() / totalDebtAll * 100 else 0.0
+            val nonAffiliatedRatio = if (totalDebtAll > 0) totalNonAffDebt.toDouble() / totalDebtAll * 100 else 0.0
             nonAffiliatedOver20 = nonAffiliatedRatio >= 20
-            val nonAffNamesStr = if (nonAffNames.isNotEmpty()) nonAffNames.joinToString(",") else ""
+            val nonAffNamesStr = allNonAffNames.joinToString(",")
             if (nonAffiliatedOver20) {
                 specialNotesList.add("미협약 ${String.format("%.0f", nonAffiliatedRatio)}% (신복위 불가) $nonAffNamesStr".trim())
             } else {
-                specialNotesList.add("미협약 ${nonAffiliatedDebt}만 별도 (${String.format("%.0f", nonAffiliatedRatio)}%) $nonAffNamesStr".trim())
+                specialNotesList.add("미협약 ${formatToEok(totalNonAffDebt)} 별도 (${String.format("%.0f", nonAffiliatedRatio)}%) $nonAffNamesStr".trim())
             }
-            Log.d("HWP_CALC", "미협약 ${nonAffiliatedDebt}만 대상채무 제외 (비율 ${String.format("%.1f", nonAffiliatedRatio)}%)")
+            Log.d("HWP_CALC", "미협약 합산: ${totalNonAffDebt}만 (대상${nonAffiliatedDebt}만+담보${totalDamboNonAff}만), 비율 ${String.format("%.1f", nonAffiliatedRatio)}%")
         } else {
             nonAffiliatedOver20 = false
-        }
-
-        // 담보 미협약 특이사항 표시 (금액/비율 포함, 대상채무 미협약과 동일 형식)
-        if (nonAffDamboNames.isNotEmpty()) {
-            val totalDamboNonAff = nonAffDamboNames.distinct().sumOf { parsedDamboCreditorMap[it] ?: 0 }
-            val damboNonAffRatio = if (totalDebtForRatio > 0) totalDamboNonAff.toDouble() / totalDebtForRatio * 100 else 0.0
-            val damboNonAffNamesStr = nonAffDamboNames.distinct().joinToString(",")
-            if (damboNonAffRatio >= 20) {
-                specialNotesList.add("미협약 ${String.format("%.0f", damboNonAffRatio)}% (신복위 불가) $damboNonAffNamesStr".trim())
-            } else {
-                specialNotesList.add("미협약 ${formatToEok(totalDamboNonAff)} 별도 (${String.format("%.0f", damboNonAffRatio)}%) $damboNonAffNamesStr".trim())
-            }
-            Log.d("HWP_CALC", "미협약 담보: $damboNonAffNamesStr ${totalDamboNonAff}만 (${String.format("%.1f", damboNonAffRatio)}%)")
         }
 
         Log.d("HWP_CALC", "6개월 비율: ${recentDebtMan}만 / ${totalDebtForRatio}만 = ${String.format("%.1f", recentDebtRatio)}%")
@@ -3974,177 +3994,73 @@ class MainActivity : AppCompatActivity() {
         // 차량에 잔여가치 없으면 (시세-담보<=0) 장기 차량 불가 무시 (특이에만 표시)
         val longTermCarBlockedEffective = longTermCarBlocked && carValue > 0
 
-        // 장기(신복위) 보수 계산
+        // 장기(신복위) 계산 준비
         val availableIncome = income - livingCostShinbok
         val yearlyIncomeCalc = income * 12
-        var longTermYears = 0
-        var longTermMonthly = 0
         val totalPayment = (targetDebt * repaymentRate / 100.0).toInt()
         val parentDeduction = if (parentCount > 0) 50 else 0
+        var longTermIsFullPayment = totalPayment >= targetDebt && targetDebt > 0
 
         Log.d("HWP_CALC", "장기 계산: 소득=$income, 생계비=$livingCostShinbok, 부모=${parentCount}명(${parentDeduction}만), 가용소득=${availableIncome - parentDeduction}")
 
-        if (targetDebt > 0) {
-            // 가구수 단계적 축소: 원래 가구 → 줄여가며 40만 이상 확보, 1인까지 줄여도 안되면 부모공제 제외
-            var ltHousehold = householdForShinbok
-            var ltLivingCost = livingCostTable[ltHousehold]
-            var step1 = income - ltLivingCost - parentDeduction
-
-            if (step1 < 40 && ltHousehold > 1) {
-                // 가구수를 줄여가며 시도 (부모공제 유지)
-                while (step1 < 40 && ltHousehold > 1) {
-                    ltHousehold--
-                    ltLivingCost = livingCostTable[ltHousehold]
-                    step1 = income - ltLivingCost - parentDeduction
-                }
-                if (step1 >= 40) {
-                    Log.d("HWP_CALC", "장기 가구수 축소: ${householdForShinbok}인→${ltHousehold}인(${ltLivingCost}만), 소득-생계비-부모=$step1")
-                }
+        // shortTermTotal 계산 (장기 계산보다 먼저 필요)
+        if (shortTermMonthly > 0 && shortTermMonths > 0 && shortTermMonthly * shortTermMonths > shortTermDebt) {
+            shortTermMonths = shortTermDebt / shortTermMonthly
+            if (shortTermMonths < 1) shortTermMonths = 1
+            shortTermResult = "${shortTermMonthly}만 / ${shortTermMonths}개월납"
+        }
+        var shortTermTotal = if (!shortTermBlocked && shortTermMonthly > 0) shortTermMonthly * shortTermMonths else 0
+        if (shortTermCarSaleApplied) {
+            val debtAfterCar = targetDebt
+            val propAfterCar = netProperty - carValue
+            val stMonthly = income - livingCostHoeseng
+            val stAdj = if (stMonthly <= 0 && income > livingCostTable[1]) income - livingCostTable[1] else stMonthly
+            if (stAdj > 0) {
+                var stMonths = Math.round(debtAfterCar.toDouble() / stAdj).toInt().coerceIn(1, 60)
+                shortTermTotal = stAdj * stMonths
+            } else if (income <= livingCostTable[1] && debtAfterCar > propAfterCar) {
+                val stByDebt = Math.ceil((debtAfterCar - propAfterCar).toDouble() / 36).toInt()
+                shortTermTotal = stByDebt * 36
             }
-
-            if (step1 >= 40) {
-                longTermMonthly = step1
-                Log.d("HWP_CALC", "장기 1단계: 소득-생계비(${ltHousehold}인)-부모=$step1")
+        }
+        if (!shortTermBlocked && originalNetProperty > 0 && shortTermMonthly > 0 && shortTermMonthly * 36 < originalNetProperty) {
+            val propertyMonths = originalNetProperty / shortTermMonthly
+            if (propertyMonths <= 60) {
+                shortTermMonths = propertyMonths
+                shortTermTotal = shortTermMonthly * propertyMonths
+                shortTermResult = "${shortTermMonthly}만 / ${propertyMonths}개월납"
+                Log.d("HWP_CALC", "청산가치 보장: 월${shortTermMonthly}×36=${shortTermMonthly * 36} < 재산${originalNetProperty} → ${propertyMonths}개월 (${shortTermTotal}만)")
             } else {
-                // 1인가구까지 줄여도 40 미만 → 부모공제 제외
-                val step2 = income - livingCostTable[1]
-                if (step2 >= 40) {
-                    longTermMonthly = step2
-                    Log.d("HWP_CALC", "장기 2단계: 부모 제외, 소득-생계비(1인)=$step2")
-                } else {
-                    longTermMonthly = 40
-                    Log.d("HWP_CALC", "장기 3단계: 최소 40만 적용")
-                }
-            }
-
-            // 월변제금 50만 이하 → 소득 기반 재계산
-            if (longTermMonthly in 1..50 && income > 0) {
-                val isAlone = householdForShinbok == 1 && parentCount == 0  // 1인 + 부모 없음
-                val isHeavy = hasWolse || parsedDamboTotal > 0 || householdForShinbok >= 3  // 월세/담보/3인 이상
-                val prevMonthly = longTermMonthly
-                longTermMonthly = when {
-                    isAlone && isHeavy -> income / 4   // 둘 다 해당 → 소득/4
-                    isAlone -> income / 3              // 1인+부모없음 → 소득/3
-                    isHeavy -> income / 5              // 월세/담보/3인+ → 소득/5
-                    else -> income / 4                 // 기본 → 소득/4
-                }
-                if (longTermMonthly < 40) longTermMonthly = 40
-                Log.d("HWP_CALC", "장기 50만이하 소득기반: ${prevMonthly}만 → 소득${income}/${if (isAlone && isHeavy) "4" else if (isAlone) "3" else if (isHeavy) "5" else "4"}=${longTermMonthly}만 (1인=${isAlone}, 부담=${isHeavy})")
-            }
-
-            // 120개월 초과 체크: 총변제금 ÷ 월변제금 > 120이면 → 총변제금÷120
-            val totalMonths = if (longTermMonthly > 0) Math.ceil(totalPayment.toDouble() / longTermMonthly).toInt() else 0
-            if (totalMonths > 120) {
-                val prevMonthly = longTermMonthly
-                longTermMonthly = Math.ceil(totalPayment.toDouble() / 120).toInt()
-                Log.d("HWP_CALC", "장기 120개월 초과: ${prevMonthly}만×${totalMonths}개월 > 120 → 총변제금÷120=$longTermMonthly")
-            }
-
-        }
-
-        var roundedLongTermMonthly = longTermMonthly
-
-        // 원금전액변제 여부 미리 판단 (5만 반올림 전에 결정)
-        var longTermIsFullPayment = totalPayment >= targetDebt && targetDebt > 0
-
-        // 보수 년수: 총변제금 ÷ 월변제금 ÷ 12 (반올림, 최소 2년, 최대 10년)
-        if (roundedLongTermMonthly > 0) {
-            longTermYears = Math.round(totalPayment.toDouble() / roundedLongTermMonthly / 12.0).toInt()
-            longTermYears = longTermYears.coerceIn(2, 10)
-            // 월변제금 × 기간이 총변제금 초과 시 기간 축소 후 월변제금 재계산
-            val maxYears = Math.round(totalPayment.toDouble() / (roundedLongTermMonthly * 12)).toInt().coerceAtLeast(2)
-            if (longTermYears > maxYears) {
-                longTermYears = maxYears
-                roundedLongTermMonthly = totalPayment / (longTermYears * 12)
-                longTermMonthly = roundedLongTermMonthly
+                val newMonthly = Math.ceil(originalNetProperty.toDouble() / 60).toInt()
+                shortTermMonthly = newMonthly
+                shortTermMonths = 60
+                shortTermTotal = newMonthly * 60
+                shortTermResult = "${newMonthly}만 / 60개월납"
+                Log.d("HWP_CALC", "청산가치 보장: 월변제금×36 < 재산${originalNetProperty}, 기간${propertyMonths} > 60 → 재산/60=${newMonthly}만 × 60개월 (${shortTermTotal}만)")
             }
         }
-        Log.d("HWP_CALC", "장기 보수: 총변제금=$totalPayment, 월변제금=$roundedLongTermMonthly, ${longTermYears}년")
-
-        // 프리랜서: 기간 6년 고정, 월변제금 = 총변제금/72, 40만 이하면 40만 기준으로 기간 재계산
-        if (isFreelancer && targetDebt > 0 && totalPayment > 0) {
-            val freelancerMonthly = Math.ceil(totalPayment.toDouble() / 72).toInt()
-            val roundedFreelancer = freelancerMonthly
-            if (roundedFreelancer <= 40) {
-                roundedLongTermMonthly = 40
-                longTermMonthly = 40
-                longTermYears = Math.round(totalPayment.toDouble() / 40 / 12.0).toInt()
-                longTermYears = longTermYears.coerceIn(3, 10)
-                Log.d("HWP_CALC", "프리랜서 장기: 변제금 40만 고정 → ${longTermYears}년")
-            } else {
-                roundedLongTermMonthly = roundedFreelancer
-                longTermMonthly = freelancerMonthly
-                longTermYears = 6
-                Log.d("HWP_CALC", "프리랜서 장기: 기간 6년 고정, 월변제금=${roundedLongTermMonthly}(총변제금÷72)")
-            }
+        if (shortTermBlocked && !shortTermHardBlocked && shortTermBlockReason.isNotEmpty() && !shortTermResult.contains(shortTermBlockReason)) {
+            shortTermResult = "$shortTermResult ($shortTermBlockReason)"
         }
 
-        // 장기 월변제금 5만 단위 반올림 (원금전액변제 시 미적용)
-        if (roundedLongTermMonthly >= 40 && !longTermIsFullPayment) {
-            roundedLongTermMonthly = (roundedLongTermMonthly + 2) / 5 * 5
-        }
-        // 총변제액이 대상채무 초과 시 조정
-        var longTermUseMonths = false
-        var longTermDisplayMonths = 0
-        if (longTermYears > 0 && roundedLongTermMonthly * longTermYears * 12 > targetDebt) {
-            // 기간을 먼저 줄임
-            val reducedYears = maxOf(2, totalPayment / (roundedLongTermMonthly * 12))
-            if (roundedLongTermMonthly * reducedYears * 12 <= totalPayment) {
-                longTermYears = reducedYears
-            } else {
-                // 기간을 최소로 줄여도 초과 → 월변제금 줄임
-                val adjustedMonthly = totalPayment / (longTermYears * 12)
-                if (adjustedMonthly < 40 && longTermYears > 1) {
-                    roundedLongTermMonthly = 40
-                    longTermYears = Math.round(totalPayment.toDouble() / 40 / 12.0).toInt().coerceAtLeast(2)
-                } else {
-                    roundedLongTermMonthly = adjustedMonthly
-                }
-            }
-        }
-
-        // 소득 기반 변제금으로 1년 이내 완납 가능 → 100% 변제, 최소 3년
-        if (roundedLongTermMonthly > 0 && totalPayment < roundedLongTermMonthly * 12) {
-            roundedLongTermMonthly = targetDebt / 36
-            longTermYears = 3
-            longTermIsFullPayment = true
-            Log.d("HWP_CALC", "장기 1년 미만 → 100% 변제: ${roundedLongTermMonthly}만 / 3년납")
-        }
-
-        // 장기 채무 부족: 월변제금 < 40만이면 채무가 너무 적어 장기(신복위) 불가
-        val longTermDebtInsufficient = roundedLongTermMonthly in 1 until 40
-        if (longTermDebtInsufficient) Log.d("HWP_CALC", "장기 채무 부족: 월변제금=${roundedLongTermMonthly}만 < 40만")
-
-        // 방생 판단은 공격 계산 후에
-
-        // 장기(신복위) 공격 계산: (소득 - 최저생계비 - 부모) × 2/3
-        var aggressiveYears = 0
-        var roundedAggressiveMonthly = 0
-
-        if (targetDebt > 0 && roundedLongTermMonthly > 0) {
-            val aggressiveBase = income - livingCostShinbok - parentDeduction
-            val aggressiveMonthly = Math.ceil(aggressiveBase * 2.0 / 3.0).toInt()
-            roundedAggressiveMonthly = aggressiveMonthly
-            if (roundedAggressiveMonthly < 40) roundedAggressiveMonthly = 40
-
-            // 공격 월변제금 5만 단위 반올림 (원금 전액 변제 시 적용 안함)
-            if (roundedAggressiveMonthly >= 40 && !longTermIsFullPayment) {
-                roundedAggressiveMonthly = (roundedAggressiveMonthly + 2) / 5 * 5
-            }
-            // 총변제액이 대상채무 초과 시 내림
-            if (roundedAggressiveMonthly > 0 && roundedAggressiveMonthly * maxOf(1, aggressiveYears) * 12 > targetDebt) {
-                roundedAggressiveMonthly = targetDebt / (maxOf(1, aggressiveYears) * 12)
-            }
-            // 공격 년수: 총변제금 ÷ 공격 월변제금 ÷ 12 (반올림)
-            aggressiveYears = Math.round(totalPayment.toDouble() / roundedAggressiveMonthly / 12.0).toInt()
-            if (aggressiveYears > 10) {
-                // 10년 초과 시: 총변제금 ÷ 120 = 공격 월변제금
-                roundedAggressiveMonthly = Math.ceil(totalPayment.toDouble() / 120).toInt()
-                if (!longTermIsFullPayment) roundedAggressiveMonthly = (roundedAggressiveMonthly + 2) / 5 * 5
-                aggressiveYears = 10
-                Log.d("HWP_CALC", "장기 공격 10년 초과 → 총변제금÷120=${roundedAggressiveMonthly}만/10년")
-            }
-        }
+        // 장기(신복위) 보수 + 공격 + 최종 계산 (공통 함수 사용)
+        val ltResult = calcLongTermValues(
+            totalPayment, targetDebt, income, livingCostShinbok, livingCostTable, parentDeduction,
+            householdForShinbok, parentCount, isFreelancer, longTermIsFullPayment,
+            hasWolse, parsedDamboTotal,
+            hasAuction, hasSeizure, hasGambling, hasStock, hasCrypto,
+            recentDebtRatio, delinquentDays, hasOwnRealEstate,
+            majorCreditorRatio, shortTermTotal,
+            minMonthly = 40, maxMonths = 120
+        )
+        var roundedLongTermMonthly = ltResult.conservativeMonthly
+        var longTermYears = ltResult.conservativeYears
+        var roundedAggressiveMonthly = ltResult.aggressiveMonthly
+        var aggressiveYears = ltResult.aggressiveYears
+        val longTermDebtInsufficient = ltResult.debtInsufficient
+        longTermIsFullPayment = ltResult.isFullPayment
+        var longTermUseMonths = ltResult.useMonths
+        var longTermDisplayMonths = ltResult.displayMonths
         acost = roundedLongTermMonthly
 
         // 장기는 소득부족이어도 최소 40만으로 진행 가능 (소득부족은 단기에만 해당)
@@ -4163,7 +4079,8 @@ class MainActivity : AppCompatActivity() {
         val saeDebtOverLimit = totalSecuredDebt > 100000 || totalUnsecuredDebt > 50000  // 새새: 담보10억/무담보5억
         val saePropertyExcess = (netProperty - targetDebt) > 60000  // 새새: 재산-대상채무 6억 초과 시 불가
         val noDebtDuringBusiness = businessEndYear > 0 && !hasDebtDuringBusiness  // 폐업했는데 사업기간 중 채무 없음 → 사업무관
-        val canApplySae = hasBusinessHistory && !(isFreelancer && !isBusinessOwner) && !isNonProfit && !isCorporateBusiness && !saeDebtOverLimit && !saePropertyExcess && !noDebtDuringBusiness && !hasSaechulbalBusilChaju
+        val effectiveCorporate = isCorporateBusiness && !isBusinessOwner  // 개인사업자 겸 법인이면 개인사업자 우선
+        val canApplySae = hasBusinessHistory && !(isFreelancer && !isBusinessOwner) && !isNonProfit && !effectiveCorporate && !saeDebtOverLimit && !saePropertyExcess && !noDebtDuringBusiness && !hasSaechulbalBusilChaju
         Log.d("HWP_CALC", "새새 조건: 사업이력=$hasBusinessHistory(AI), 실제연체=${actualDelinquentDays}일(전체=${delinquentDays}일), 프리랜서=$isFreelancer, 사업자=$isBusinessOwner, 비영리=$isNonProfit, 법인=$isCorporateBusiness, 개업=${businessStartYear}년${if (businessStartMonth > 0) "${businessStartMonth}월" else ""}, 폐업=$businessEndYear, 사업중채무=$hasDebtDuringBusiness, 채무한도초과=$saeDebtOverLimit(담보=${totalSecuredDebt}만,무담보=${totalUnsecuredDebt}만), 재산초과=$saePropertyExcess(재산${netProperty}-채무${targetDebt}=${netProperty - targetDebt}만)")
         var saeTotalPayment = 0; var saeMonthly = 0; var saeYears = 0
         if (canApplySae && targetDebt > 0) {
@@ -4233,17 +4150,11 @@ class MainActivity : AppCompatActivity() {
                 val label = if (dispMonthly in 50..55) "장기 시 차담보 일부 상환 필요" else "차량 처분필요"
                 specialNotesList.add("$label(${carDispStr(disposeCars[0])})")
             } else if (carCount >= 2) {
-                if (disposeCars.size == carCount) {
-                    // 모두 처분
-                    val details = disposeCars.map { carDispStr(it) }.joinToString(", ")
-                    specialNotesList.add("차량 ${carCount}대 보유($details)")
-                } else if (disposeCars.size == 1) {
-                    val dispMonthly = carInfoList[disposeCars[0]][2]
-                    val label = if (dispMonthly in 50..55) "장기 시 차담보 일부 상환 필요" else "차량 처분필요"
-                    specialNotesList.add("$label(${carDispStr(disposeCars[0])})")
-                } else {
-                    val details = disposeCars.map { "${carDispStr(it)}" }.joinToString(", ")
-                    specialNotesList.add("차량 ${carCount}대 보유($details)")
+                specialNotesList.add("차량 ${carCount}대 이상 보유")
+                for (idx in disposeCars) {
+                    val name = if (idx < carNameList.size) carNameList[idx] else "차량${idx + 1}"
+                    val info = carInfoList[idx]
+                    specialNotesList.add("$name 처분필요 (시세${info[0]}만 / 담보${info[1]}만 / 월납부${info[2]}만)")
                 }
             }
         } else if (longTermCarBlocked && !longTermCarBlockedEffective && !longTermPropertyExcess) {
@@ -4257,7 +4168,7 @@ class MainActivity : AppCompatActivity() {
             specialNotesList.add("장기 시 차량처분 필요")
         }
         // 사업자이력 년도 정보 추가 (새출발 가능기간 내 사업이력만 표시, 법인사업은 제외)
-        val hasBizHistory = hasBusinessHistory && !isCorporateBusiness && !isNonProfit
+        val hasBizHistory = hasBusinessHistory && !effectiveCorporate && !isNonProfit
         if (hasBizHistory && !specialNotesList.any { it.contains("사업자") || it.contains("자영업") || it.contains("폐업") }) {
             val bizNote = if (businessStartYear > 0) {
                 if (businessEndYear > 0 && businessEndYear < java.time.LocalDate.now().year) {
@@ -4387,49 +4298,7 @@ class MainActivity : AppCompatActivity() {
             isBangsaeng = true; bangsaengReason = "채무한도초과"
         }
 
-        // 단기 총변제액이 대상채무 초과 시 개월수 내림
-        if (shortTermMonthly > 0 && shortTermMonths > 0 && shortTermMonthly * shortTermMonths > shortTermDebt) {
-            shortTermMonths = shortTermDebt / shortTermMonthly
-            if (shortTermMonths < 1) shortTermMonths = 1
-            shortTermResult = "${shortTermMonthly}만 / ${shortTermMonths}개월납"
-        }
-        var shortTermTotal = if (!shortTermBlocked && shortTermMonthly > 0) shortTermMonthly * shortTermMonths else 0
-        // 차량 처분 시 단기 총액
-        if (shortTermCarSaleApplied) {
-            val debtAfterCar = targetDebt
-            val propAfterCar = netProperty - carValue
-            val stMonthly = income - livingCostHoeseng
-            val stAdj = if (stMonthly <= 0 && income > livingCostTable[1]) income - livingCostTable[1] else stMonthly
-            if (stAdj > 0) {
-                var stMonths = Math.round(debtAfterCar.toDouble() / stAdj).toInt().coerceIn(1, 60)
-                shortTermTotal = stAdj * stMonths
-            } else if (income <= livingCostTable[1] && debtAfterCar > propAfterCar) {
-                val stByDebt = Math.ceil((debtAfterCar - propAfterCar).toDouble() / 36).toInt()
-                val roundedSt = stByDebt
-                shortTermTotal = roundedSt * 36
-            }
-        }
-        // 청산가치 보장: 월변제금×36 < 재산이면 재산/월변제금 = 기간, 60초과시 재산/60 = 월변제금
-        if (!shortTermBlocked && originalNetProperty > 0 && shortTermMonthly > 0 && shortTermMonthly * 36 < originalNetProperty) {
-            val propertyMonths = originalNetProperty / shortTermMonthly
-            if (propertyMonths <= 60) {
-                shortTermMonths = propertyMonths
-                shortTermTotal = shortTermMonthly * propertyMonths
-                shortTermResult = "${shortTermMonthly}만 / ${propertyMonths}개월납"
-                Log.d("HWP_CALC", "청산가치 보장: 월${shortTermMonthly}×36=${shortTermMonthly * 36} < 재산${originalNetProperty} → ${propertyMonths}개월 (${shortTermTotal}만)")
-            } else {
-                val newMonthly = Math.ceil(originalNetProperty.toDouble() / 60).toInt()
-                shortTermMonthly = newMonthly
-                shortTermMonths = 60
-                shortTermTotal = newMonthly * 60
-                shortTermResult = "${newMonthly}만 / 60개월납"
-                Log.d("HWP_CALC", "청산가치 보장: 월변제금×36 < 재산${originalNetProperty}, 기간${propertyMonths} > 60 → 재산/60=${newMonthly}만 × 60개월 (${shortTermTotal}만)")
-            }
-        }
-        // shortTermBlocked이지만 hardBlock이 아닌 경우 사유 접미사 복원
-        if (shortTermBlocked && !shortTermHardBlocked && shortTermBlockReason.isNotEmpty() && !shortTermResult.contains(shortTermBlockReason)) {
-            shortTermResult = "$shortTermResult ($shortTermBlockReason)"
-        }
+        // shortTermTotal, longTermTotal, aggressiveTotal은 위에서 계산 완료
         val longTermTotal = roundedLongTermMonthly * longTermYears * 12
         val aggressiveTotal = roundedAggressiveMonthly * aggressiveYears * 12
 
@@ -4500,154 +4369,21 @@ class MainActivity : AppCompatActivity() {
 
         val propertyDamboDebt = parsedDamboTotal
 
-        // ============= 장기 최종 년수/변제금 계산 =============
-        var finalYear = 0
-        var finalMonthly = 0
+        // ============= 장기 최종 년수/변제금 계산 (calcLongTermValues 결과 사용) =============
         var longTermAggressive = false
-        val longTermBlockedByAuction = hasAuction  // 경매 진행중 → 장기 불가
-        val longTermBlockedBySeizure = hasSeizure  // 압류 진행중 → 장기 불가
-        val allDebtIsGuarantee = guaranteeDebtMan > 0 && guaranteeDebtMan >= targetDebt  // 모든 채권이 지급보증 → 장기 불가
+        val longTermBlockedByAuction = hasAuction
+        val longTermBlockedBySeizure = hasSeizure
+        val allDebtIsGuarantee = guaranteeDebtMan > 0 && guaranteeDebtMan >= targetDebt
         if (allDebtIsGuarantee) Log.d("HWP_CALC", "장기 불가: 모든 채권이 지급보증채무 (${guaranteeDebtMan}만/${targetDebt}만)")
         val longTermFullyBlocked = ((longTermPropertyExcess || longTermCarBlockedEffective) && !canLongTermAfterCarSale) || longTermDebtOverLimit || longTermBlockedByAuction || longTermDebtInsufficient || allDebtIsGuarantee
 
-        if (targetDebt > 0 && longTermYears > 0 && totalPayment > 0 && !longTermFullyBlocked) {
-            // 보수 기간이 3년 이하이면 3년으로 설정
-            if (longTermYears < 2) longTermYears = 2
-            val effectiveMax = Math.min(aggressiveYears, longTermYears + 4).coerceAtLeast(longTermYears)
-
-            // 12개월 후에도 면책 5년 미해소 판단
-            var dischargeNotClearedIn12Months = false
-            if (dischargeWithin5Years && dischargeYear > 0) {
-                val twelveMonthsLater = Calendar.getInstance().apply { add(Calendar.MONTH, 12) }
-                val dischargeEndCal = Calendar.getInstance().apply {
-                    set(dischargeYear + 5, if (dischargeMonth > 0) dischargeMonth - 1 else 0, 1)
-                }
-                if (dischargeEndCal.after(twelveMonthsLater)) {
-                    dischargeNotClearedIn12Months = true
-                }
-            }
-
-            // 최종 년수 결정 (5단계: 보수 → 보수방향 → 중간 → 공격방향 → 공격)
-            val surplus = income - livingCostShinbok
-
-            // 보수 그대로: 경매/압류/도박/최근50%+/장기연체/집처분
-            val isConservative = hasAuction || hasSeizure || hasGambling ||
-                recentDebtRatio >= 50 || delinquentDays >= 90 || hasOwnRealEstate
-
-            // 공격 그대로: 소득 <= 생계비
-            val isAggressive = income <= livingCostShinbok
-
-            // 과반 채권사 → 보수와 공격의 평균
-            val isMajorAverage = majorCreditorRatio > 50
-
-            // 보수 방향 (3*보수+공격)/4: 주식/코인/소득<3%/최근30-50%
-            val isTowardConservative = !isMajorAverage && (hasStock || hasCrypto ||
-                (surplus > 0 && surplus < targetDebt * 0.03) ||
-                (recentDebtRatio >= 30 && recentDebtRatio < 50))
-
-            // 공격 방향 (보수+3*공격)/4: 소득>3%/프리랜서/단기<장기-1000
-            val isTowardAggressive = (surplus > targetDebt * 0.03) || isFreelancer ||
-                (shortTermTotal > 0 && shortTermTotal < longTermTotal - 1000)
-
-            val yearLabel: String
-            val ltMonths = if (roundedLongTermMonthly > 0) totalPayment / roundedLongTermMonthly else longTermYears * 12
-            val agMonths = if (roundedAggressiveMonthly > 0) totalPayment / roundedAggressiveMonthly else aggressiveYears * 12
-            val rawMonthsVal = when {
-                isMajorAverage -> { yearLabel = "(보수+공격)/2"; (ltMonths + agMonths) / 2 }
-                isConservative -> { yearLabel = "보수"; ltMonths }
-                isAggressive -> { yearLabel = "공격"; agMonths }
-                isTowardConservative -> { yearLabel = "(3보수+공격)/4"; (3 * ltMonths + agMonths) / 4 }
-                isTowardAggressive -> { yearLabel = "(보수+3공격)/4"; (ltMonths + 3 * agMonths) / 4 }
-                else -> { yearLabel = "(보수+공격)/2"; (ltMonths + agMonths) / 2 }
-            }
-            var finalMonthsVal = rawMonthsVal.coerceIn(ltMonths, maxOf(ltMonths, agMonths))
-            // 120개월 초과 시 120개월로 제한
-            if (finalMonthsVal > 120) finalMonthsVal = 120
-            finalYear = finalMonthsVal / 12
-            if (finalMonthsVal % 12 != 0) {
-                // 6개월 단위 반올림 (반올림 결과 월변제금 < 40만이면 내림)
-                var rounded = ((finalMonthsVal + 3) / 6) * 6
-                if (rounded < 6) rounded = 6
-                if (totalPayment > 0 && rounded > 0 && totalPayment / rounded < 40) {
-                    rounded = (finalMonthsVal / 6) * 6  // 내림
-                    if (rounded < 6) rounded = 6
-                }
-                longTermDisplayMonths = rounded
-                if (longTermDisplayMonths % 12 == 0) {
-                    finalYear = longTermDisplayMonths / 12
-                    longTermDisplayMonths = 0
-                } else {
-                    longTermUseMonths = true
-                }
-            }
-
-            // 최종 월변제금 계산: 최소 40만
-            val finalTotalMonths = if (longTermUseMonths && longTermDisplayMonths > 0) longTermDisplayMonths else finalYear * 12
-            finalMonthly = if (finalTotalMonths > 0) totalPayment / finalTotalMonths else 0
-            if (finalMonthly < 40) {
-                finalMonthly = 40
-                // 최소 월변제금 × 기간이 총변제금 초과 시 기간 축소 후 월변제금 재계산
-                val maxYears = Math.round(totalPayment.toDouble() / (40 * 12)).toInt().coerceAtLeast(2)
-                if (finalYear > maxYears) {
-                    finalYear = maxYears
-                    longTermUseMonths = false
-                    longTermDisplayMonths = 0
-                    finalMonthly = totalPayment / (finalYear * 12)
-                    if (finalMonthly <= 0) finalMonthly = Math.ceil(totalPayment.toDouble() / (finalYear * 12)).toInt().coerceAtLeast(1)
-                }
-            }
-
-            // 최종 월변제금 5만 단위 반올림 (원금 전액 변제 시 적용 안함)
-            if (finalMonthly >= 40 && !longTermIsFullPayment) {
-                finalMonthly = (finalMonthly + 2) / 5 * 5
-            }
-            // 총변제액이 대상채무 초과 시 내림
-            val checkMonths = if (longTermUseMonths && longTermDisplayMonths > 0) longTermDisplayMonths else finalYear * 12
-            if (checkMonths > 0 && finalMonthly * checkMonths > targetDebt) {
-                finalMonthly = targetDebt / checkMonths
-            }
-            Log.d("HWP_CALC", "최종 기간 계산: 보수=${ltMonths}개월, 공격=${agMonths}개월, $yearLabel → ${finalMonthsVal}개월(${finalYear}년), finalMonthly=${finalMonthly}만")
-        }
-
-        // 원금전액변제 → 개월 수 표시 (년수 반올림 대신 실제 개월 수)
-        if (longTermIsFullPayment && roundedLongTermMonthly > 0) {
-            // 과반 채권사: 5단계 계산 결과(보수와 보수공격평균의 평균) 유지
-            if (majorCreditorRatio <= 50) {
-                finalMonthly = roundedLongTermMonthly
-            }
-            if (finalMonthly <= 0) finalMonthly = roundedLongTermMonthly
-            longTermDisplayMonths = totalPayment / finalMonthly  // 내림
-            // 6개월 단위 반올림 (반올림 결과 월변제금 < 40만이면 내림)
-            var roundedMonths = ((longTermDisplayMonths + 3) / 6) * 6
-            if (roundedMonths < 6) roundedMonths = 6
-            if (totalPayment > 0 && roundedMonths > 0 && totalPayment / roundedMonths < 40) {
-                roundedMonths = (longTermDisplayMonths / 6) * 6
-                if (roundedMonths < 6) roundedMonths = 6
-            }
-            longTermDisplayMonths = roundedMonths
-            // 반올림된 개월수로 월변제금 재계산 (내림 → 총변제액 초과 방지)
-            finalMonthly = totalPayment / longTermDisplayMonths
-            // 120개월 초과 시 월변제금 올림
-            if (longTermDisplayMonths > 120) {
-                longTermDisplayMonths = 120
-                finalMonthly = Math.ceil(totalPayment.toDouble() / 120).toInt()
-                Log.d("HWP_CALC", "원금전액변제 120개월 초과 → ${finalMonthly}만 / 120개월납")
-            }
-            // 총변제액이 대상채무 초과 시 기간을 먼저 줄이고, 최소(1개월)이면 월변제금 줄임
-            if (longTermDisplayMonths > 0 && finalMonthly * longTermDisplayMonths > totalPayment) {
-                val reducedMonths = totalPayment / finalMonthly
-                if (reducedMonths > 0) {
-                    longTermDisplayMonths = reducedMonths
-                } else {
-                    finalMonthly = totalPayment / longTermDisplayMonths
-                }
-            }
-            if (longTermDisplayMonths % 12 != 0) {
-                longTermUseMonths = true
-            } else {
-                finalYear = longTermDisplayMonths / 12
-            }
-            Log.d("HWP_CALC", "원금전액변제 → ${finalMonthly}만 / ${if (longTermUseMonths) "${longTermDisplayMonths}개월납" else "${finalYear}년납"}")
+        // 최종 결과는 공통 함수(calcLongTermValues)에서 이미 계산됨 → longTermFullyBlocked 시 무시
+        var finalYear = if (!longTermFullyBlocked) ltResult.finalYear else 0
+        var finalMonthly = if (!longTermFullyBlocked) ltResult.finalMonthly else 0
+        if (!longTermFullyBlocked) {
+            longTermUseMonths = ltResult.useMonths
+            longTermDisplayMonths = ltResult.displayMonths
+            longTermIsFullPayment = ltResult.isFullPayment
         }
 
         // 최종 장기 총액 (단순유리 비교용)
@@ -4849,7 +4585,7 @@ class MainActivity : AppCompatActivity() {
                 val sixMonthsLaterCheck = Calendar.getInstance().apply { add(Calendar.MONTH, 6) }
                 if (dischargeEndCal.after(sixMonthsLaterCheck) && shortTermMonthly > 0) {
                     val dischargeBlockReason = if (isBankruptcyDischarge) "파산 면책 5년 이내" else "면책 5년 이내"
-                    shortTermResult = "현재 불가, ${shortTermMonthly}만 ${shortTermMonths}개월납 ($dischargeBlockReason)"
+                    shortTermResult = "현재 불가 ($dischargeBlockReason), ${shortTermMonthly}만 ${shortTermMonths}개월납"
                     Log.d("HWP_CALC", "6~10개월 면책 해소 단기 표시: $shortTermResult")
                 }
             } else {
@@ -4941,7 +4677,7 @@ class MainActivity : AppCompatActivity() {
                             else -> "신회워"
                         }
                     }
-                    val immediatePrefix = if (!isSaeDiagnosis && effectiveShortTermBlocked && !longTermFullyBlocked && finalYear > 0 && !dischargeWithin5Years) {
+                    val immediatePrefix = if (!isSaeDiagnosis && !longTermFullyBlocked && finalYear > 0 && !dischargeWithin5Years && !hasHfcMortgage) {
                         "회워 바로 가능, "
                     } else if (!isSaeDiagnosis && !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && finalLongTermTotal - shortTermTotal > 1000) {
                         ""  // 단순 바로 가능은 뒤에서 처리
@@ -5073,6 +4809,23 @@ class MainActivity : AppCompatActivity() {
         val studentLoanShortSuffix = if (studentLoanApplied) " (학자금 포함)" else ""
         binding.test1.text = "[단기] $shortTermResult$spouseSecretSuffix$studentLoanShortSuffix"
 
+        // 장기 전용 진단 라벨 (최종 진단과 별개, line 4782-4794 로직과 동일)
+        val longTermDiagLabel = if (longTermFullyBlocked || longTermDebtOverLimit) "" else {
+            if (!hoeBlocked && !hasYuwoCond) {
+                when {
+                    delinquentDays >= 90 -> "회워"
+                    delinquentDays >= 30 -> "프회워"
+                    else -> "신회워"
+                }
+            } else {
+                when {
+                    delinquentDays >= 90 -> if (dischargeWithin5Years || hasHfcMortgage) "워유워" else "회워"
+                    delinquentDays >= 30 -> "프유워"
+                    else -> "신유워"
+                }
+            }
+        }
+
         val longTermText = StringBuilder()
         if (longTermDebtOverLimit) {
             val limitDetails = buildList {
@@ -5090,7 +4843,8 @@ class MainActivity : AppCompatActivity() {
             if (finalYear > 0 && finalMonthly > 0) {
                 val studentLoanLongSuffix = if (studentLoanApplied) " (학자금 제외)" else ""
                 val periodStr = if (longTermUseMonths) "${longTermDisplayMonths}개월납" else "${finalYear}년납"
-                longTermText.append("[장기] ${finalMonthly}만 / $periodStr$studentLoanLongSuffix")
+                val diagSuffix = if (longTermDiagLabel.isNotEmpty()) " / $longTermDiagLabel" else ""
+                longTermText.append("[장기] ${finalMonthly}만 / $periodStr$studentLoanLongSuffix$diagSuffix")
             } else {
                 longTermText.append("[장기] 장기 불가 (압류 진행중)")
             }
@@ -5103,11 +4857,13 @@ class MainActivity : AppCompatActivity() {
         } else if (finalYear > 0 && finalMonthly > 0) {
             val studentLoanLongSuffix = if (studentLoanApplied) " (학자금 제외)" else ""
             val periodStr = if (longTermUseMonths) "${longTermDisplayMonths}개월납" else "${finalYear}년납"
-            longTermText.append("[장기] ${finalMonthly}만 / $periodStr$studentLoanLongSuffix")
+            val diagSuffix = if (longTermDiagLabel.isNotEmpty()) " / $longTermDiagLabel" else ""
+            longTermText.append("[장기] ${finalMonthly}만 / $periodStr$studentLoanLongSuffix$diagSuffix")
         } else {
             val studentLoanLongSuffix = if (studentLoanApplied) " (학자금 제외)" else ""
             val periodStr = if (longTermUseMonths) "${longTermDisplayMonths}개월납" else "${longTermYears}년납"
-            longTermText.append("[장기] ${roundedLongTermMonthly}만 / $periodStr$studentLoanLongSuffix")
+            val diagSuffix = if (longTermDiagLabel.isNotEmpty()) " / $longTermDiagLabel" else ""
+            longTermText.append("[장기] ${roundedLongTermMonthly}만 / $periodStr$studentLoanLongSuffix$diagSuffix")
         }
         if (canApplySae && saeTotalPayment > 0) {
             longTermText.append("\n[새새] ${saeMonthly}만 / ${saeYears}년납")
@@ -5116,7 +4872,7 @@ class MainActivity : AppCompatActivity() {
         } else if (hasBusinessHistory && isBusinessOwner && saePropertyExcess) {
             longTermText.append("\n[새새] 새새 불가(재산초과)")
         }
-        binding.test2.text = longTermText.toString()
+        // binding.test2는 finalDiagnosis 확정 후 설정
 
         // 단순유리 + 새새 가능 + 새새-단기 <= 1000만 → 새새가 유리
         if (diagnosis == "단순유리" && canApplySae && saeTotalPayment > 0 && shortTermTotal > 0 && saeTotalPayment - shortTermTotal <= 1000) {
@@ -5329,6 +5085,7 @@ class MainActivity : AppCompatActivity() {
             Log.d("HWP_CALC", "납부회수: ${paymentNote.ifEmpty { "바로 회워 가능" }} (2개월=${twoMonthDebt}만, 3개월=${threeMonthDebt}만, 4개월=${fourMonthDebt}만)")
         }
 
+        binding.test2.text = longTermText.toString()
         binding.testing.text = "[진단] $finalDiagnosis"
         binding.half.text = ""
 
@@ -5342,7 +5099,273 @@ class MainActivity : AppCompatActivity() {
             canApplySae, saeTotalPayment, netProperty,
             isBusinessOwner, hasBusinessHistory, saeDebtOverLimit, saePropertyExcess, totalSecuredDebt,
             studentLoanApplied, isClientMode, longTermUseMonths, longTermDisplayMonths,
-            name, finalDiagnosis
+            name, finalDiagnosis,
+            longTermDiagLabel, daebuDebtMan, repaymentRate, originalTargetDebt, diagnosis,
+            livingCostTable = livingCostTable, householdForShinbok = householdForShinbok,
+            parentCount = parentCount, hasWolse = hasWolse, parsedDamboTotal = parsedDamboTotal
+        )
+    }
+
+    data class LongTermCalcResult(
+        val conservativeMonthly: Int,
+        val conservativeYears: Int,
+        val aggressiveMonthly: Int,
+        val aggressiveYears: Int,
+        val finalMonthly: Int,
+        val finalYear: Int,
+        val useMonths: Boolean,
+        val displayMonths: Int,
+        val isFullPayment: Boolean,
+        val debtInsufficient: Boolean
+    )
+
+    private fun calcLongTermValues(
+        totalPayment: Int, targetDebt: Int, income: Int,
+        livingCostShinbok: Int, livingCostTable: IntArray, parentDeduction: Int,
+        householdForShinbok: Int, parentCount: Int,
+        isFreelancer: Boolean, isFullPaymentInitial: Boolean,
+        hasWolse: Boolean, parsedDamboTotal: Int,
+        hasAuction: Boolean, hasSeizure: Boolean, hasGambling: Boolean,
+        hasStock: Boolean, hasCrypto: Boolean,
+        recentDebtRatio: Double, delinquentDays: Int, hasOwnRealEstate: Boolean,
+        majorCreditorRatio: Double, shortTermTotal: Int,
+        minMonthly: Int, maxMonths: Int
+    ): LongTermCalcResult {
+        val maxYears = maxMonths / 12
+        if (targetDebt <= 0 || totalPayment <= 0) {
+            return LongTermCalcResult(0, 0, 0, 0, 0, 0, false, 0, isFullPaymentInitial, false)
+        }
+
+        // === 보수 계산 ===
+        var ltHousehold = householdForShinbok
+        var ltLivingCost = livingCostTable[ltHousehold]
+        var step1 = income - ltLivingCost - parentDeduction
+        if (step1 < minMonthly && ltHousehold > 1) {
+            while (step1 < minMonthly && ltHousehold > 1) {
+                ltHousehold--
+                ltLivingCost = livingCostTable[ltHousehold]
+                step1 = income - ltLivingCost - parentDeduction
+            }
+        }
+        var monthly: Int
+        if (step1 >= minMonthly) {
+            monthly = step1
+        } else {
+            val step2 = income - livingCostTable[1]
+            if (step2 >= minMonthly) {
+                monthly = step2
+            } else {
+                monthly = minMonthly
+            }
+        }
+        // 월변제금 50만 이하 → 소득 기반 재계산
+        if (monthly in 1..50 && income > 0) {
+            val isAlone = householdForShinbok == 1 && parentCount == 0
+            val isHeavy = hasWolse || parsedDamboTotal > 0 || householdForShinbok >= 3
+            monthly = when {
+                isAlone && isHeavy -> income / 4
+                isAlone -> income / 3
+                isHeavy -> income / 5
+                else -> income / 4
+            }
+            if (monthly < minMonthly) monthly = minMonthly
+        }
+        // maxMonths 초과 체크
+        val totalMonths = if (monthly > 0) Math.ceil(totalPayment.toDouble() / monthly).toInt() else 0
+        if (totalMonths > maxMonths) {
+            monthly = Math.ceil(totalPayment.toDouble() / maxMonths).toInt()
+        }
+        var conservativeMonthly = monthly
+
+        // 보수 년수
+        var conservativeYears = 0
+        if (conservativeMonthly > 0) {
+            conservativeYears = Math.round(totalPayment.toDouble() / conservativeMonthly / 12.0).toInt()
+            conservativeYears = conservativeYears.coerceIn(3, maxYears)
+            val calcMaxYears = Math.round(totalPayment.toDouble() / (conservativeMonthly * 12)).toInt().coerceAtLeast(3)
+            if (conservativeYears > calcMaxYears) {
+                conservativeYears = calcMaxYears
+                conservativeMonthly = totalPayment / (conservativeYears * 12)
+            }
+        }
+
+        // 프리랜서
+        if (isFreelancer && targetDebt > 0 && totalPayment > 0) {
+            val freelancerMonthly = Math.ceil(totalPayment.toDouble() / 72).toInt()
+            if (freelancerMonthly <= minMonthly) {
+                conservativeMonthly = minMonthly
+                conservativeYears = Math.round(totalPayment.toDouble() / minMonthly / 12.0).toInt()
+                conservativeYears = conservativeYears.coerceIn(3, maxYears)
+            } else {
+                conservativeMonthly = freelancerMonthly
+                conservativeYears = 6
+            }
+        }
+
+        // 5만 단위 반올림
+        var isFullPayment = isFullPaymentInitial
+        if (conservativeMonthly >= minMonthly && !isFullPayment) {
+            conservativeMonthly = (conservativeMonthly + 2) / 5 * 5
+        }
+        // 총변제액 초과 조정 (다단계)
+        if (conservativeYears > 0 && conservativeMonthly * conservativeYears * 12 > targetDebt) {
+            val reducedYears = maxOf(3, totalPayment / (conservativeMonthly * 12))
+            if (conservativeMonthly * reducedYears * 12 <= totalPayment) {
+                conservativeYears = reducedYears
+            } else {
+                val adjustedMonthly = totalPayment / (conservativeYears * 12)
+                if (adjustedMonthly < minMonthly && conservativeYears > 1) {
+                    conservativeMonthly = minMonthly
+                    conservativeYears = Math.round(totalPayment.toDouble() / minMonthly / 12.0).toInt().coerceAtLeast(3)
+                } else {
+                    conservativeMonthly = adjustedMonthly
+                }
+            }
+        }
+
+        // 1년 미만 완납 → 100% 변제, 최소 3년
+        if (conservativeMonthly > 0 && totalPayment < conservativeMonthly * 12) {
+            conservativeMonthly = targetDebt / 36
+            conservativeYears = 3
+            isFullPayment = true
+        }
+        val debtInsufficient = conservativeMonthly in 1 until minMonthly
+
+        // === 공격 계산 ===
+        val aggressiveBase = income - livingCostShinbok - parentDeduction
+        var aggressiveMonthly = Math.ceil(aggressiveBase * 2.0 / 3.0).toInt()
+        if (aggressiveMonthly < minMonthly) aggressiveMonthly = minMonthly
+        if (aggressiveMonthly >= minMonthly && !isFullPayment) {
+            aggressiveMonthly = (aggressiveMonthly + 2) / 5 * 5
+        }
+        var aggressiveYears = 0
+        if (aggressiveMonthly > 0 && aggressiveMonthly * maxOf(1, aggressiveYears) * 12 > targetDebt) {
+            aggressiveMonthly = targetDebt / (maxOf(1, aggressiveYears) * 12)
+        }
+        aggressiveYears = Math.round(totalPayment.toDouble() / aggressiveMonthly / 12.0).toInt()
+        if (aggressiveYears > maxYears) {
+            aggressiveMonthly = Math.ceil(totalPayment.toDouble() / maxMonths).toInt()
+            if (!isFullPayment) aggressiveMonthly = (aggressiveMonthly + 2) / 5 * 5
+            aggressiveYears = maxYears
+        }
+
+        // === 최종 5단계 계산 (개월 기반 + 6개월 단위 반올림) ===
+        if (conservativeYears < 3) conservativeYears = 3
+        val longTermTotal = conservativeMonthly * conservativeYears * 12
+
+        val surplus = income - livingCostShinbok
+        val isConservative = hasAuction || hasSeizure || hasGambling ||
+            recentDebtRatio >= 50 || delinquentDays >= 90 || hasOwnRealEstate
+        val isAggressive = income <= livingCostShinbok
+        val isMajorAverage = majorCreditorRatio > 50
+        val isTowardConservative = !isMajorAverage && (hasStock || hasCrypto ||
+            (surplus > 0 && surplus < targetDebt * 0.03) ||
+            (recentDebtRatio >= 30 && recentDebtRatio < 50))
+        val isTowardAggressive = (surplus > targetDebt * 0.03) || isFreelancer ||
+            (shortTermTotal > 0 && shortTermTotal < longTermTotal - 1000)
+
+        val ltMonths = if (conservativeMonthly > 0) totalPayment / conservativeMonthly else conservativeYears * 12
+        val agMonths = if (aggressiveMonthly > 0) totalPayment / aggressiveMonthly else aggressiveYears * 12
+        val rawMonthsVal = when {
+            isMajorAverage -> (ltMonths + agMonths) / 2
+            isConservative -> ltMonths
+            isAggressive -> agMonths
+            isTowardConservative -> (3 * ltMonths + agMonths) / 4
+            isTowardAggressive -> (ltMonths + 3 * agMonths) / 4
+            else -> (ltMonths + agMonths) / 2
+        }
+        var finalMonthsVal = rawMonthsVal.coerceIn(ltMonths, maxOf(ltMonths, agMonths))
+        if (finalMonthsVal > maxMonths) finalMonthsVal = maxMonths
+        var finalYear = finalMonthsVal / 12
+        var useMonths = false
+        var displayMonths = 0
+        if (finalMonthsVal % 12 != 0) {
+            var rounded = ((finalMonthsVal + 3) / 6) * 6
+            if (rounded < 6) rounded = 6
+            if (totalPayment > 0 && rounded > 0 && totalPayment / rounded < minMonthly) {
+                rounded = (finalMonthsVal / 6) * 6
+                if (rounded < 6) rounded = 6
+            }
+            displayMonths = rounded
+            if (displayMonths % 12 == 0) {
+                finalYear = displayMonths / 12
+                displayMonths = 0
+            } else {
+                useMonths = true
+            }
+        }
+
+        // 최종 월변제금
+        val finalTotalMonths = if (useMonths && displayMonths > 0) displayMonths else finalYear * 12
+        var finalMonthly = if (finalTotalMonths > 0) totalPayment / finalTotalMonths else 0
+        if (finalMonthly < minMonthly) {
+            finalMonthly = minMonthly
+            val calcMaxYears = Math.round(totalPayment.toDouble() / (minMonthly * 12)).toInt().coerceAtLeast(3)
+            if (finalYear > calcMaxYears) {
+                finalYear = calcMaxYears
+                useMonths = false
+                displayMonths = 0
+                finalMonthly = totalPayment / (finalYear * 12)
+                if (finalMonthly <= 0) finalMonthly = Math.ceil(totalPayment.toDouble() / (finalYear * 12)).toInt().coerceAtLeast(1)
+            }
+        }
+
+        // 5만 단위 반올림
+        if (finalMonthly >= minMonthly && !isFullPayment) {
+            val roundedUp = (finalMonthly + 2) / 5 * 5
+            val checkMonths = if (useMonths && displayMonths > 0) displayMonths else finalYear * 12
+            if (checkMonths > 0 && roundedUp * checkMonths > targetDebt) {
+                finalMonthly = finalMonthly / 5 * 5
+            } else {
+                finalMonthly = roundedUp
+            }
+        }
+        val checkMonths = if (useMonths && displayMonths > 0) displayMonths else finalYear * 12
+        if (checkMonths > 0 && finalMonthly * checkMonths > targetDebt) {
+            finalMonthly = targetDebt / checkMonths
+        }
+
+        // 원금전액변제 → 개월 수 표시
+        if (isFullPayment && conservativeMonthly > 0) {
+            if (majorCreditorRatio <= 50) {
+                finalMonthly = conservativeMonthly
+            }
+            if (finalMonthly <= 0) finalMonthly = conservativeMonthly
+            displayMonths = totalPayment / finalMonthly
+            var roundedMonths = ((displayMonths + 3) / 6) * 6
+            if (roundedMonths < 6) roundedMonths = 6
+            if (totalPayment > 0 && roundedMonths > 0 && totalPayment / roundedMonths < minMonthly) {
+                roundedMonths = (displayMonths / 6) * 6
+                if (roundedMonths < 6) roundedMonths = 6
+            }
+            displayMonths = roundedMonths
+            finalMonthly = totalPayment / displayMonths
+            if (displayMonths > maxMonths) {
+                displayMonths = maxMonths
+                finalMonthly = Math.ceil(totalPayment.toDouble() / maxMonths).toInt()
+            }
+            // 총변제액 초과 시 기간 줄이기
+            if (displayMonths > 0 && finalMonthly * displayMonths > totalPayment) {
+                val reducedMonths = totalPayment / finalMonthly
+                if (reducedMonths > 0) {
+                    displayMonths = reducedMonths
+                } else {
+                    finalMonthly = totalPayment / displayMonths
+                }
+            }
+            if (displayMonths % 12 != 0) {
+                useMonths = true
+            } else {
+                finalYear = displayMonths / 12
+            }
+        }
+
+        return LongTermCalcResult(
+            conservativeMonthly, conservativeYears,
+            aggressiveMonthly, aggressiveYears,
+            finalMonthly, finalYear,
+            useMonths, displayMonths,
+            isFullPayment, debtInsufficient
         )
     }
 
@@ -5355,137 +5378,53 @@ class MainActivity : AppCompatActivity() {
         canApplySae: Boolean, saeTotalPayment: Int, netProperty: Int,
         isBusinessOwner: Boolean, hasBusinessHistory: Boolean, saeDebtOverLimit: Boolean, saePropertyExcess: Boolean, totalSecuredDebt: Int,
         studentLoanApplied: Boolean, isClientMode: Boolean, longTermUseMonths: Boolean, longTermDisplayMonths: Int,
-        name: String, finalDiagnosis: String
+        name: String, finalDiagnosis: String,
+        longTermDiagLabel: String, daebuDebtMan: Int, repaymentRate: Int, originalTargetDebt: Int, diagnosis: String,
+        minMonthly: Int = 50, maxMonths: Int = 96,
+        livingCostTable: IntArray, householdForShinbok: Int, parentCount: Int, hasWolse: Boolean, parsedDamboTotal: Int
     ) {
-        // 거래처 진단 계산 (최소 월 50만, 최대 8년)
-        var clientFinalMonthly = 0
-        var clientFinalYear = 0
-        var clientRoundedLongTermMonthly = 0
-        var clientLongTermYears = 0
-        if (targetDebt > 0 && !longTermFullyBlocked) {
-            // 보수 계산 (min 50만, max 96개월)
-            val step1 = income - livingCostShinbok - parentDeduction
-            val step2 = income - livingCostShinbok
-            var cltMonthly = when {
-                step1 >= 50 -> step1
-                step2 >= 50 -> step2
-                else -> 50
-            }
-            val cltTotalMonths = if (cltMonthly > 0) Math.ceil(totalPayment.toDouble() / cltMonthly).toInt() else 0
-            if (cltTotalMonths > 96) {
-                cltMonthly = Math.ceil(totalPayment.toDouble() / 96).toInt()
-            }
-            clientRoundedLongTermMonthly = cltMonthly
+        val maxYears = maxMonths / 12
 
-            // 보수 년수 (max 8년)
-            if (clientRoundedLongTermMonthly > 0) {
-                val exactYears = totalPayment.toDouble() / clientRoundedLongTermMonthly / 12.0
-                clientLongTermYears = if (exactYears - Math.floor(exactYears) >= 0.35) Math.ceil(exactYears).toInt() else Math.floor(exactYears).toInt()
-                clientLongTermYears = clientLongTermYears.coerceIn(2, 8)
-                val maxYears = Math.round(totalPayment.toDouble() / (clientRoundedLongTermMonthly * 12)).toInt().coerceAtLeast(2)
-                if (clientLongTermYears > maxYears) {
-                    clientLongTermYears = maxYears
-                    clientRoundedLongTermMonthly = totalPayment / (clientLongTermYears * 12)
-                }
-            }
+        // 공통 함수로 장기 계산 (본체와 동일 로직, minMonthly/maxMonths만 다름)
+        val ltResult = if (targetDebt > 0 && !longTermFullyBlocked) {
+            calcLongTermValues(
+                totalPayment, targetDebt, income, livingCostShinbok, livingCostTable, parentDeduction,
+                householdForShinbok, parentCount, isFreelancer, longTermIsFullPayment,
+                hasWolse, parsedDamboTotal,
+                hasAuction, hasSeizure, hasGambling, hasStock, hasCrypto,
+                recentDebtRatio, delinquentDays, hasOwnRealEstate,
+                majorCreditorRatio, shortTermTotal,
+                minMonthly, maxMonths
+            )
+        } else null
+        val clientFinalMonthly = ltResult?.finalMonthly ?: 0
+        val clientFinalYear = ltResult?.finalYear ?: 0
+        val clientUseMonths = ltResult?.useMonths ?: false
+        val clientDisplayMonths = ltResult?.displayMonths ?: 0
 
-            // 프리랜서
-            if (isFreelancer && totalPayment > 0) {
-                val freelancerMonthly = Math.ceil(totalPayment.toDouble() / 72).toInt()
-                if (freelancerMonthly <= 50) {
-                    clientRoundedLongTermMonthly = 50
-                    val exactYears = totalPayment.toDouble() / 50 / 12.0
-                    clientLongTermYears = if (exactYears - Math.floor(exactYears) >= 0.35) Math.ceil(exactYears).toInt() else Math.floor(exactYears).toInt()
-                    clientLongTermYears = clientLongTermYears.coerceIn(3, 8)
-                } else {
-                    clientRoundedLongTermMonthly = freelancerMonthly
-                    clientLongTermYears = 6
-                }
-            }
-
-            // 1년 미만 완납 → 100% 변제, 최소 3년
-            if (clientRoundedLongTermMonthly > 0 && totalPayment < clientRoundedLongTermMonthly * 12) {
-                clientRoundedLongTermMonthly = targetDebt / 36
-                if (clientRoundedLongTermMonthly < 50) clientRoundedLongTermMonthly = 50
-                clientLongTermYears = 3
-            }
-
-            // 공격 계산 (min 50만, max 8년)
-            var cltAggressiveMonthly = Math.ceil(clientRoundedLongTermMonthly * 2.0 / 3.0).toInt()
-            if (cltAggressiveMonthly < 50) cltAggressiveMonthly = clientRoundedLongTermMonthly
-            var cltAggressiveYears = Math.round(totalPayment.toDouble() / cltAggressiveMonthly / 12.0).toInt()
-            if (cltAggressiveYears > 8) {
-                cltAggressiveMonthly = Math.ceil(totalPayment.toDouble() / 96).toInt()
-                cltAggressiveYears = 8
-            }
-
-            // 최종 년수/변제금 (max 8년)
-            if (clientLongTermYears < 3) clientLongTermYears = 3
-            val cltEffectiveMax = Math.min(cltAggressiveYears, clientLongTermYears + 4).coerceAtLeast(clientLongTermYears).coerceAtMost(8)
-
-            // 거래처 최종 년수: 본체와 동일한 5단계 로직 (max 8년)
-            val cltSurplus = income - livingCostShinbok
-            val cltIsConservative = hasAuction || hasSeizure || hasGambling ||
-                recentDebtRatio >= 50 || delinquentDays >= 90 || hasOwnRealEstate
-            val cltIsAggressive = income <= livingCostShinbok
-            val cltIsMajorAverage = majorCreditorRatio > 50
-            val cltIsTowardConservative = !cltIsMajorAverage && (hasStock || hasCrypto ||
-                (cltSurplus > 0 && cltSurplus < targetDebt * 0.03) ||
-                (recentDebtRatio >= 30 && recentDebtRatio < 50))
-            val cltIsTowardAggressive = (cltSurplus > targetDebt * 0.03) || isFreelancer ||
-                (shortTermTotal > 0 && shortTermTotal < longTermTotal - 1000)
-            clientFinalYear = when {
-                cltIsMajorAverage -> Math.round((clientLongTermYears + cltAggressiveYears) / 2.0).toInt()
-                cltIsConservative -> clientLongTermYears
-                cltIsAggressive -> cltAggressiveYears
-                cltIsTowardConservative -> Math.round((3.0 * clientLongTermYears + cltAggressiveYears) / 4.0).toInt()
-                cltIsTowardAggressive -> Math.round((clientLongTermYears + 3.0 * cltAggressiveYears) / 4.0).toInt()
-                else -> Math.round((clientLongTermYears + cltAggressiveYears) / 2.0).toInt()
-            }
-            clientFinalYear = clientFinalYear.coerceIn(clientLongTermYears, maxOf(clientLongTermYears, cltAggressiveYears)).coerceAtMost(8)
-
-            clientFinalMonthly = if (clientFinalYear > 0) totalPayment / (clientFinalYear * 12) else 0
-            if (clientFinalMonthly < 50) {
-                clientFinalMonthly = 50
-                val maxYears = Math.round(totalPayment.toDouble() / (50 * 12)).toInt().coerceAtLeast(2)
-                if (clientFinalYear > maxYears) {
-                    clientFinalYear = maxYears
-                    clientFinalMonthly = totalPayment / (clientFinalYear * 12)
-                }
-            }
-            // 거래처 장기 5만 단위 반올림 (원금 전액 변제 시 적용 안함)
-            if (clientFinalMonthly >= 50 && !longTermIsFullPayment) {
-                clientFinalMonthly = (clientFinalMonthly + 2) / 5 * 5
-            }
-            // 총변제액이 대상채무 초과 시 내림
-            if (clientFinalYear > 0 && clientFinalMonthly * clientFinalYear * 12 > targetDebt) {
-                clientFinalMonthly = targetDebt / (clientFinalYear * 12)
-            }
-        }
-
-        // 거래처 새새 계산 (min 50만, max 8년)
+        // 새새 계산 (min ${minMonthly}만, max ${maxYears}년)
         var clientSaeMonthly = 0; var clientSaeYears = 0; var clientSaeTotalPayment = 0
         if (canApplySae && targetDebt > 0 && saeTotalPayment > 0) {
             clientSaeTotalPayment = saeTotalPayment
             val incomeRatio = income.toDouble() / targetDebt * 100
             clientSaeYears = when {
                 incomeRatio > 6 -> 5
-                incomeRatio > 3 -> 8
-                else -> 8
+                incomeRatio > 3 -> maxYears
+                else -> maxYears
             }
-            clientSaeMonthly = Math.ceil(clientSaeTotalPayment.toDouble() / (clientSaeYears * 12)).toInt()
-            val clientSaeIsFullPayment = netProperty >= targetDebt
-            if (!clientSaeIsFullPayment && clientSaeMonthly > 50) {
+            val saeIsFullPayment = netProperty >= targetDebt
+            clientSaeMonthly = clientSaeTotalPayment / (clientSaeYears * 12)
+            if (!saeIsFullPayment && clientSaeMonthly >= minMonthly) {
                 clientSaeMonthly = (clientSaeMonthly + 2) / 5 * 5
             }
             if (clientSaeYears > 0 && clientSaeMonthly * clientSaeYears * 12 > targetDebt) {
                 clientSaeMonthly = targetDebt / (clientSaeYears * 12)
             }
-            if (clientSaeMonthly <= 50) {
-                clientSaeMonthly = 50
-                val exactYears = clientSaeTotalPayment.toDouble() / 50 / 12.0
-                clientSaeYears = if (exactYears - Math.floor(exactYears) >= 0.35) Math.ceil(exactYears).toInt() else Math.floor(exactYears).toInt()
-                clientSaeYears = clientSaeYears.coerceIn(2, 8)
+            if (clientSaeMonthly < minMonthly) {
+                clientSaeMonthly = minMonthly
+                val exactYears = clientSaeTotalPayment.toDouble() / minMonthly / 12.0
+                clientSaeYears = Math.round(exactYears).toInt()
+                clientSaeYears = clientSaeYears.coerceIn(2, maxYears)
                 clientSaeTotalPayment = clientSaeMonthly * clientSaeYears * 12
             } else {
                 clientSaeTotalPayment = clientSaeMonthly * clientSaeYears * 12
@@ -5497,15 +5436,18 @@ class MainActivity : AppCompatActivity() {
             val clientLongTermText = StringBuilder()
             val legoTest2 = binding.test2.text.toString()
             val legoFirstLine = legoTest2.split("\n").firstOrNull() ?: ""
-            if (targetDebt > 0 && !longTermFullyBlocked && clientFinalMonthly > 0) {
+            // 본체가 정상 결과("만 /" 포함)이고 거래처도 결과 있으면 → 거래처 숫자로 교체
+            // 본체가 불가/미협약 등이면 → 그대로 사용 (조건 중복 불필요)
+            val legoHasResult = legoFirstLine.contains("만 /")
+            if (legoHasResult && clientFinalMonthly > 0) {
                 val studentLoanLongSuffix = if (studentLoanApplied) " (학자금 제외)" else ""
-                // 거래처: 원금전액변제 시 96개월(8년) cap, 초과 시 월변제금 재계산
-                val clientDisplayMonths = if (longTermUseMonths) longTermDisplayMonths.coerceAtMost(96) else clientFinalYear * 12
-                val clientMonthlyForDisplay = if (longTermUseMonths && longTermDisplayMonths > 96 && clientDisplayMonths > 0) {
-                    Math.ceil(totalPayment.toDouble() / 96).toInt()
+                val dispMonths = if (clientUseMonths) clientDisplayMonths.coerceAtMost(maxMonths) else clientFinalYear * 12
+                val clientMonthlyForDisplay = if (clientUseMonths && clientDisplayMonths > maxMonths && dispMonths > 0) {
+                    Math.ceil(totalPayment.toDouble() / maxMonths).toInt()
                 } else clientFinalMonthly
-                val clientPeriodStr = if (longTermUseMonths) "${clientDisplayMonths}개월납" else "${clientFinalYear}년납"
-                clientLongTermText.append("[장기] ${clientMonthlyForDisplay}만 / $clientPeriodStr$studentLoanLongSuffix")
+                val clientPeriodStr = if (clientUseMonths) "${dispMonths}개월납" else "${clientFinalYear}년납"
+                val clientDiagSuffix = if (longTermDiagLabel.isNotEmpty()) " / $longTermDiagLabel" else ""
+                clientLongTermText.append("[장기] ${clientMonthlyForDisplay}만 / $clientPeriodStr$studentLoanLongSuffix$clientDiagSuffix")
             } else {
                 clientLongTermText.append(legoFirstLine)
             }
@@ -5515,6 +5457,17 @@ class MainActivity : AppCompatActivity() {
                 clientLongTermText.append("\n[새새] 새새 불가(채무한도초과 담보${formatToEok(totalSecuredDebt)})")
             } else if (hasBusinessHistory && isBusinessOwner && saePropertyExcess) {
                 clientLongTermText.append("\n[새새] 새새 불가(재산초과)")
+            }
+            // 부결고지 적용
+            val daebuRatioClient = if (originalTargetDebt > 0) daebuDebtMan.toDouble() / originalTargetDebt * 100 else 0.0
+            val isClientBugyeol = (repaymentRate == 100 && majorCreditorRatio >= 50 && !diagnosis.startsWith("단순")) || daebuRatioClient > 50
+            if (isClientBugyeol) {
+                val newClt = clientLongTermText.toString().replace(Regex("(\\[(장기|새새)\\][^\n]*)")) { mr ->
+                    val line = mr.value
+                    if (!line.contains("불가") && !line.contains("부결고지")) "$line (부결고지)" else line
+                }
+                clientLongTermText.clear()
+                clientLongTermText.append(newClt)
             }
             binding.test2.text = clientLongTermText.toString()
         }

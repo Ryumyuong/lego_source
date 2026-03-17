@@ -175,10 +175,17 @@ object AffiliateList {
         if (normalizedName.contains("대구은행") || koreanName.contains("대구은행")) return true
         if (normalizedName.contains("상호") || koreanName.contains("상호")) return true
 
+        // "카드" 포함 시에만 제거 버전도 매칭에 사용 (예: "기업카드" → "기업", "농협카드" → "농협")
+        val hasCard = normalizedName.contains("카드") || koreanName.contains("카드")
+        val noCardName = if (hasCard) normalizeAeE(normalizedName.replace("카드", "")) else ""
+        val noCardKorean = if (hasCard) normalizeAeE(koreanName.replace("카드", "")) else ""
+
         // 1. 정확히 일치하는지 확인
         if (keywords.any { normalizeAeE(it) == normName }) return true
         if (keywords.any { normalizeAeE(it) == normalizeAeE(creditorName) }) return true
         if (keywords.any { normalizeAeE(it) == normKorean }) return true
+        if (noCardName.isNotEmpty() && noCardName != normName && keywords.any { normalizeAeE(it) == noCardName }) return true
+        if (noCardKorean.isNotEmpty() && noCardKorean != normKorean && keywords.any { normalizeAeE(it) == noCardKorean }) return true
 
         // 2. 채권자명이 키워드를 포함하는지 확인 (긴 키워드부터)
         val sortedKeywords = keywords.filter { it.length >= 3 }.sortedByDescending { it.length }
@@ -189,6 +196,9 @@ object AffiliateList {
             if (normName.contains(normKeyword) || normalizeAeE(creditorName).contains(normKeyword) || normKorean.contains(normKeyword)) {
                 return true
             }
+            // "카드" 제거 버전으로도 포함 확인
+            if (noCardName.isNotEmpty() && noCardName != normName && noCardName.contains(normKeyword)) return true
+            if (noCardKorean.isNotEmpty() && noCardKorean != normKorean && noCardKorean.contains(normKeyword)) return true
             // OCR 중복 음절 대응: 중복 제거 후 재비교
             val dedupKeyword = removeConsecutiveDupSyllables(normKeyword)
             if (dedupName.contains(dedupKeyword) || dedupKorean.contains(dedupKeyword)) {
@@ -207,6 +217,9 @@ object AffiliateList {
                 (normKeyword.contains(normKorean) && normKorean.length >= 2)) {
                 return true
             }
+            // "카드" 제거 버전으로도 확인
+            if (noCardName.length >= 2 && noCardName != normName && normKeyword.contains(noCardName)) return true
+            if (noCardKorean.length >= 2 && noCardKorean != normKorean && normKeyword.contains(noCardKorean)) return true
         }
 
         return false
