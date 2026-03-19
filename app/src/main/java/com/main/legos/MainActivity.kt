@@ -1449,6 +1449,8 @@ class MainActivity : AppCompatActivity() {
         var hasBunyangGwon = false  // 분양권 보유 여부 (재산 제외)
         var bunyangGwonNet = 0     // 분양권 순가치 (만원, 시세-대출)
         var jeonseNoJilgwon = false  // 전세대출 질권설정x → 대상채무 포함
+        val jilgwonOCreditors = mutableSetOf<String>()  // 질권설정o 채권사 (담보 유지)
+        val jilgwonXCreditors = mutableSetOf<String>()  // 질권설정x 채권사 (담보→대상채무 포함)
         var excludedSeqNumbers = mutableSetOf<Int>()  // 대출과목에서 제외할 순번
         var includedSeqNumbers = mutableSetOf<Int>()  // 강제 포함할 순번 (순번N 신용대출)
         var hasOngoingProcess = false  // 다른 채무조정 진행 중
@@ -2279,13 +2281,33 @@ class MainActivity : AppCompatActivity() {
                 Log.d("HWP_PARSE", "보험대출 감지: $line")
             }
 
-            // 전세대출 질권설정 없음 감지 → 대상채무 포함
+            // 질권설정 채권사별 구분 (x=대상채무 포함, o=담보 유지)
             if (lineNoSpace.contains("질권설정x") || lineNoSpace.contains("질권설정X") ||
                         lineNoSpace.contains("질권x") || lineNoSpace.contains("질권X") ||
                         lineNoSpace.contains("질권설정안") ||
                         line.contains("질권설정 x") || line.contains("질권 x") || line.contains("질권설정 안")) {
                 jeonseNoJilgwon = true
-                Log.d("HWP_PARSE", "전세대출 질권설정 없음 감지 → 대상채무 포함: $line")
+                Log.d("HWP_PARSE", "질권설정 없음 감지 → 대상채무 포함: $line")
+            }
+            // 질권설정x 채권사 추출 (해당 채권사는 담보→대상채무 포함)
+            val jilgwonXPattern = Pattern.compile("([가-힣a-zA-Zａ-ｚＡ-Ｚ]+)\\s*질권설정\\s*[xX]")
+            val jilgwonXMatcher = jilgwonXPattern.matcher(line)
+            while (jilgwonXMatcher.find()) {
+                val creditorName = jilgwonXMatcher.group(1)!!.trim()
+                if (creditorName.isNotEmpty()) {
+                    jilgwonXCreditors.add(creditorName)
+                    Log.d("HWP_PARSE", "질권설정x 채권사 감지: $creditorName → 대상채무 포함")
+                }
+            }
+            // 질권설정o 채권사 추출 (해당 채권사는 담보 유지)
+            val jilgwonOPattern = Pattern.compile("([가-힣a-zA-Zａ-ｚＡ-Ｚ]+)\\s*질권설정\\s*[oO]")
+            val jilgwonOMatcher = jilgwonOPattern.matcher(line)
+            while (jilgwonOMatcher.find()) {
+                val creditorName = jilgwonOMatcher.group(1)!!.trim()
+                if (creditorName.isNotEmpty()) {
+                    jilgwonOCreditors.add(creditorName)
+                    Log.d("HWP_PARSE", "질권설정o 채권사 감지: $creditorName → 담보 유지")
+                }
             }
 
             // "순번N. 차량담보" 패턴 → 해당 순번 대상채무 제외 (오타 "차랑" 대응)
@@ -2990,7 +3012,13 @@ class MainActivity : AppCompatActivity() {
                     val loanTypeToken = creditorTokens.firstOrNull { it.contains("대출") && it.contains(Regex("\\(\\d+\\)")) } ?: ""
                     val isInsurancePolicyLoan = loanTypeToken.contains("보험") || lineNoSpace.contains("(약관)") || lineNoSpace.contains("약관대출") || lineNoSpace.contains("약관") || lineNoSpace.contains("보험담보")
                     val isGuaranteeLoan = lineNoSpace.contains("지급보증") || lineNoSpace.contains("보증담보") || lineNoSpace.contains("보증서담보")
-                    val isDamboLoan = ((lineFor담보.contains("담보") || is290DamboByCategory || is290DamboByPdf || isDamboByPreScan || lineNoSpace.contains("할부금융") || lineNoSpace.contains("리스") || lineNoSpace.contains("후순위") || lineNoSpace.contains("중고차할부") || lineNoSpace.contains("신차할부") || lineNoSpace.contains("차할부") || lineNoSpace.contains("차량할부") || lineNoSpace.contains("자동차할부") || lineNoSpace.contains("(500)") || lineNoSpace.contains("(510)") || lineNoSpace.contains("시설자금") || lineNoSpace.contains("(1071)") || lineNoSpace.contains("중도금") || lineNoSpace.contains("예적금") || lineNoSpace.contains("보증금대출") || (isJeonse270 && !jeonseNoJilgwon) || isInsurancePolicyLoan) && !isGuaranteeLoan && !lineNoSpace.contains("(240)") && !lineNoSpace.contains("무담보") && !lineNoSpace.contains("마이너스"))
+                    val creditorNameForJilgwon = rawCreditorName.replace(Regex("\\[.*"), "")
+                    val isJilgwonOCreditor = jilgwonOCreditors.any { creditorNameForJilgwon.contains(it) || it.contains(creditorNameForJilgwon) }
+                    val isJilgwonXCreditor = jilgwonXCreditors.any { creditorNameForJilgwon.contains(it) || it.contains(creditorNameForJilgwon) }
+                    if (isJilgwonXCreditor && (is290DamboByCategory || is290DamboByPdf || isDamboByPreScan || isJeonse270)) {
+                        Log.d("HWP_PARSE", "질권설정x → 담보 해제 (대상채무 포함): $rawCreditorName - $line")
+                    }
+                    val isDamboLoan = !isJilgwonXCreditor && ((lineFor담보.contains("담보") || is290DamboByCategory || is290DamboByPdf || isDamboByPreScan || lineNoSpace.contains("할부금융") || lineNoSpace.contains("리스") || lineNoSpace.contains("후순위") || lineNoSpace.contains("중고차할부") || lineNoSpace.contains("신차할부") || lineNoSpace.contains("차할부") || lineNoSpace.contains("차량할부") || lineNoSpace.contains("자동차할부") || lineNoSpace.contains("(500)") || lineNoSpace.contains("(510)") || lineNoSpace.contains("시설자금") || lineNoSpace.contains("(1071)") || lineNoSpace.contains("중도금") || lineNoSpace.contains("예적금") || lineNoSpace.contains("보증금대출") || lineNoSpace.contains("유가증권") || (isJeonse270 && (!jeonseNoJilgwon || isJilgwonOCreditor)) || isInsurancePolicyLoan) && !isGuaranteeLoan && !lineNoSpace.contains("(240)") && !lineNoSpace.contains("무담보") && !lineNoSpace.contains("마이너스"))
 
                     // 지급보증(3021): 담보/비담보 전부 대상채무 제외
                     if (lineNoSpace.contains("(3021)")) {
@@ -4819,9 +4847,9 @@ class MainActivity : AppCompatActivity() {
         val studentLoanShortSuffix = if (studentLoanApplied) " (학자금 포함)" else ""
         binding.test1.text = "[단기] $shortTermResult$spouseSecretSuffix$studentLoanShortSuffix"
 
-        // 장기 전용 진단 라벨 (최종 진단과 별개, line 4782-4794 로직과 동일)
+        // 장기 전용 진단 라벨 (최종 진단과 별개)
         val longTermDiagLabel = if (longTermFullyBlocked || longTermDebtOverLimit) "" else {
-            if (!hoeBlocked && !hasYuwoCond) {
+            var label = if (!hoeBlocked && !hasYuwoCond) {
                 when {
                     delinquentDays >= 90 -> "회워"
                     delinquentDays >= 30 -> "프회워"
@@ -4834,6 +4862,12 @@ class MainActivity : AppCompatActivity() {
                     else -> "신유워"
                 }
             }
+            // 중간 회 제거: 담보+신용 공존, 단기불가, 사업자 → 신회워→신유워, 프회워→프유워
+            val hasDamboAndCreditLabel = parsedDamboCreditorNames.any { it in parsedCreditorMap }
+            if (hasDamboAndCreditLabel || effectiveShortTermBlocked || isBusinessOwner) {
+                label = label.replace("신회워", "신유워").replace("프회워", "프유워")
+            }
+            label
         }
 
         val longTermText = StringBuilder()
