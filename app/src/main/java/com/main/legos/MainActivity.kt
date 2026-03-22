@@ -4683,7 +4683,12 @@ class MainActivity : AppCompatActivity() {
         val recentDebtExCarMan = recentDebtMan - recentCarLoanMan
         val recentRatioExCar = if (totalDebtForRatio > 0 && recentDebtExCarMan > 0) recentDebtExCarMan.toDouble() / totalDebtForRatio * 100 else 0.0
         val canAfterCarDisposal = recentDebtRatio >= 30 && recentCarLoanMan > 0 && recentRatioExCar < 30
-        if (canAfterCarDisposal) Log.d("HWP_CALC", "차량처분 시 6개월 30%미만: ${recentDebtMan}만-차량${recentCarLoanMan}만=${recentDebtExCarMan}만/${totalDebtForRatio}만=${String.format("%.1f", recentRatioExCar)}%")
+        if (canAfterCarDisposal) {
+            Log.d("HWP_CALC", "차량처분 시 6개월 30%미만: ${recentDebtMan}만-차량${recentCarLoanMan}만=${recentDebtExCarMan}만/${totalDebtForRatio}만=${String.format("%.1f", recentRatioExCar)}%")
+            val carNames = carNameList.filter { !it.isNullOrEmpty() }
+            val carNameStr = if (carNames.isNotEmpty()) carNames.joinToString("/") else "차량"
+            specialNotesList.add("$carNameStr 처분시 바로 가능")
+        }
         val isSaeDiagnosis = diagnosis == "새새" || diagnosis == "새" || diagnosis == "회새"
         if (isSaeDiagnosis) specialNotesList.removeAll { it.contains("차량처분 필요") }
         val skipRecentDateCalc = diagnosis == "방생" || diagnosis.startsWith("단순")
@@ -4767,8 +4772,8 @@ class MainActivity : AppCompatActivity() {
                 targetDebt <= 4000 -> "신유워"
                 else -> if (hoeBlocked) "신유워" else "신회워"
             }
-            // 6개월 30% 이상이면 신유회/프유회/워유회 날짜 추가
-            if (recentDebtRatio >= 30 && recentDebtEntries.isNotEmpty() && targetDebt > 0) {
+            // 6개월 30% 이상이면 신유회/프유회/워유회 날짜 추가 (회생 가능할 때만)
+            if (recentDebtRatio >= 30 && recentDebtEntries.isNotEmpty() && targetDebt > 0 && !useYu) {
                 val longDiag = when {
                     delinquentDays >= 90 -> "워유회"
                     delinquentDays >= 30 -> "프유회"
@@ -5081,6 +5086,15 @@ class MainActivity : AppCompatActivity() {
             Log.d("HWP_CALC", "장기연체 90일+ → 회워로 변경")
         }
 
+        // 장기 라벨이 최종 진단과 불일치하면 동기화
+        val standardLongTermDiags = setOf("신회워", "신유워", "프회워", "프유워", "회워", "워유워", "워회워")
+        if (diagnosis in standardLongTermDiags && longTermDiagLabel.isNotEmpty() && longTermDiagLabel != diagnosis) {
+            val updatedText = longTermText.toString().replace(" / $longTermDiagLabel", " / $diagnosis")
+            longTermText.clear()
+            longTermText.append(updatedText)
+            Log.d("HWP_CALC", "장기라벨 동기화: $longTermDiagLabel → $diagnosis")
+        }
+
         // 회워 진단 → 10%탕감(90%)으로 재조정 (기본 15%탕감보다 낮음)
         if (diagnosis == "회워" && repaymentRate == 85) {
             repaymentRate = 90
@@ -5093,7 +5107,7 @@ class MainActivity : AppCompatActivity() {
         if (shortTermCarSaleApplied) finalDiagnosis = "차량 처분 시 $finalDiagnosis"
         if (diagnosis != "방생") {
             val daebuRatio = if (originalTargetDebt > 0) daebuDebtMan.toDouble() / originalTargetDebt * 100 else 0.0
-            val isLongTermBugyeol = (repaymentRate == 100 && majorCreditorRatio >= 50 && !diagnosis.startsWith("단순")) || daebuRatio > 50
+            val isLongTermBugyeol = (repaymentRate == 100 && originalTargetDebt > 4000 && !diagnosis.startsWith("단순")) || daebuRatio > 50
             if (isLongTermBugyeol) {
                 val newLt = longTermText.toString().replace(Regex("(\\[(장기|새새)\\][^\n]*)")) { mr ->
                     val line = mr.value
@@ -5491,7 +5505,7 @@ class MainActivity : AppCompatActivity() {
             }
             // 부결고지 적용
             val daebuRatioClient = if (originalTargetDebt > 0) daebuDebtMan.toDouble() / originalTargetDebt * 100 else 0.0
-            val isClientBugyeol = (repaymentRate == 100 && majorCreditorRatio >= 50 && !diagnosis.startsWith("단순")) || daebuRatioClient > 50
+            val isClientBugyeol = (repaymentRate == 100 && originalTargetDebt > 4000 && !diagnosis.startsWith("단순")) || daebuRatioClient > 50
             if (isClientBugyeol) {
                 val newClt = clientLongTermText.toString().replace(Regex("(\\[(장기|새새)\\][^\n]*)")) { mr ->
                     val line = mr.value
