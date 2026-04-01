@@ -767,17 +767,18 @@ class MainActivity : AppCompatActivity() {
 - totalPrincipal: 맨 아래 합계 행에서 구분="전"인 행의 "원금" 값 (원 단위). "합계" 컬럼이 아닌 "원금" 컬럼의 값을 읽을 것
 - creditors: 각 채권금융회사명 + 구분="전" 행의 "원금". 같은 채권사는 합산
 
-[3] "■ 개인채무조정에서 제외된 채무내역" 테이블 ← 반드시 찾으세요!
+[3] "■ 개인채무조정에서 제외된 채무내역" 또는 "■ 제외채무 내역" 테이블 ← 반드시 찾으세요!
 - 이 테이블은 "채무별 조정내역"과 별도 페이지에 있음 (보통 후반부)
-- "■ 개인채무조정에서 제외된 채무내역"이라는 ■ 마크가 있는 제목 아래에 있음
+- "■ 개인채무조정에서 제외된 채무내역" 또는 "■ 제외채무 내역"이라는 ■ 마크가 있는 제목 아래에 있음
 - 컬럼: 채권금융회사 | 대출과목 | 계좌번호 | 원금 | 이자 | 비용 | 제외사유
-- 제외사유 예시: "개별상환(보증서 담보대출)", "개별상환(자동차 담보대출)", "소액 채무"
+- 제외사유 예시: "개별상환(보증서 담보대출)", "개별상환(자동차 담보대출)", "소액 채무", "새출발기금 매입예정"
 - excludedCreditors: 각 행에서 추출 (reason 필드는 반드시 포함!)
   - name: 채권금융회사명
   - principal: 원금 (원 단위)
   - reason: 제외사유 컬럼의 값을 반드시 읽어서 변환. 이 필드는 필수!
     "자동차 담보" 포함 → "차량담보대출", "보증서 담보" 포함 → "보증서담보대출",
     "주택 담보"/"주택담보" 포함 → "주택담보대출", "현금서비스" 포함 → "현금서비스",
+    "새출발기금 매입예정" → "새출발기금 매입예정" (그대로),
     그 외 → 제외사유 값 그대로 (예: "소액 채무", "완제")
 - excludedDebtTotal: 제외 채무 원금 전체 합계 (원 단위)
 
@@ -849,6 +850,13 @@ class MainActivity : AppCompatActivity() {
                         Log.d("FILE_PROCESS", "제외 채무 스킵(현금서비스): ${cPrincipal}만 (사유=$reason)")
                         continue
                     }
+                    // 새출발기금 매입예정 → 대상채무에 포함
+                    if (reason.contains("새출발기금") && reason.contains("매입")) {
+                        pdfAgreementDebt += cPrincipal
+                        if (cName.length >= 2) pdfAgreementCreditors[cName] = (pdfAgreementCreditors[cName] ?: 0) + cPrincipal
+                        Log.d("FILE_PROCESS", "제외→대상채무 전환(새출발기금 매입예정): ${cPrincipal}만 ($cName, 사유=$reason)")
+                        continue
+                    }
                     // 보증서담보대출만 대상채무, 차량/주택/기타 담보 → 담보
                     val isDamboType = reason.contains("차량") || reason.contains("자동차") || reason.contains("주택") || reason.contains("할부")
                     val isGuarantee = !isDamboType && (reason.contains("보증서") || reason.contains("지급보증"))
@@ -880,11 +888,11 @@ class MainActivity : AppCompatActivity() {
         if ((excludedCreditorsArr == null || excludedCreditorsArr.length() == 0) && bitmaps.size >= 2) {
             val excludedPrompt = """이 이미지들은 채무조정 체결합의서 PDF의 전체 ${bitmaps.size}페이지입니다.
 
-"■ 개인채무조정에서 제외된 채무내역"이라는 ■ 마크가 있는 제목의 테이블을 찾으세요.
+"■ 개인채무조정에서 제외된 채무내역" 또는 "■ 제외채무 내역"이라는 ■ 마크가 있는 제목의 테이블을 찾으세요.
 이 테이블은 "채무별 조정내역"과는 다른 별도 테이블이며, 보통 문서 후반부 페이지에 있습니다.
 
 이 테이블의 컬럼: 채권금융회사 | 대출과목 | 계좌번호 | 원금 | 이자 | 비용 | 제외사유
-제외사유 예시: "개별상환(보증서 담보대출)", "개별상환(자동차 담보대출)", "소액 채무"
+제외사유 예시: "개별상환(보증서 담보대출)", "개별상환(자동차 담보대출)", "소액 채무", "새출발기금 매입예정"
 
 각 행에서 추출:
 - name: 채권금융회사명
@@ -892,6 +900,7 @@ class MainActivity : AppCompatActivity() {
 - reason: 제외사유의 괄호 안 내용 기준으로:
   "자동차 담보" 포함 → "차량담보대출", "보증서 담보" 포함 → "보증서담보대출",
   "주택담보" 포함 → "주택담보대출", "현금서비스" 포함 → "현금서비스",
+  "새출발기금 매입예정" → "새출발기금 매입예정" (그대로),
   그 외 → 제외사유 값 그대로
 
 테이블이 없으면 빈 배열을 응답하세요.
@@ -918,6 +927,13 @@ class MainActivity : AppCompatActivity() {
                         if (cPrincipal > 0) {
                             if (reason.contains("현금서비스")) {
                                 Log.d("FILE_PROCESS", "제외 채무 스킵(현금서비스): ${cPrincipal}만 (사유=$reason)")
+                                continue
+                            }
+                            // 새출발기금 매입예정 → 대상채무에 포함
+                            if (reason.contains("새출발기금") && reason.contains("매입")) {
+                                pdfAgreementDebt += cPrincipal
+                                if (cName.length >= 2) pdfAgreementCreditors[cName] = (pdfAgreementCreditors[cName] ?: 0) + cPrincipal
+                                Log.d("FILE_PROCESS", "제외→대상채무 전환(${retryNum}차, 새출발기금 매입예정): ${cPrincipal}만 ($cName, 사유=$reason)")
                                 continue
                             }
                             val isDamboType = reason.contains("차량") || reason.contains("자동차") || reason.contains("주택") || reason.contains("할부")
