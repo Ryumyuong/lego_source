@@ -18,8 +18,8 @@ android {
         applicationId = "com.main.legos"
         minSdk = 26
         targetSdk = 36
-        versionCode = 35
-        versionName = "4.5"
+        versionCode = 37
+        versionName = "4.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "CLAUDE_API_KEY", "\"${localProperties.getProperty("CLAUDE_API_KEY", "")}\"")
@@ -77,12 +77,10 @@ dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
 
     // Apache POI for Excel
-    implementation("org.apache.poi:poi:5.2.5") {
-        exclude(group = "org.apache.logging.log4j")
-    }
-    implementation("org.apache.poi:poi-ooxml:5.2.5") {
-        exclude(group = "org.apache.logging.log4j")
-    }
+    implementation("org.apache.poi:poi:5.2.5")
+    implementation("org.apache.poi:poi-ooxml:5.2.5")
+    implementation("org.apache.logging.log4j:log4j-api:2.20.0")
+    implementation("org.apache.logging.log4j:log4j-core:2.20.0")
 
     // HWP file parser
     implementation("kr.dogfoot:hwplib:1.1.10")
