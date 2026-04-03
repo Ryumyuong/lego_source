@@ -1730,18 +1730,30 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             // 학자금 취업 후 상환 / 일반 상환 순번 수집
-            if (preScanLoanCat && l.contains("학자금")) {
-                val stuSeqM = Pattern.compile("(\\d{1,2})(?![억만원천년])[A-Za-z\uFF21-\uFF3A\uFF41-\uFF5A가-힣]").matcher(l)
+            if (preScanLoanCat && (l.contains("학자금") || l.contains("장학재단"))) {
+                val isAfterEmployment = l.contains("취업")
+                val stuSeqs = mutableSetOf<Int>()
+                // 콤마 구분 순번: "2,3,4,5,6,8"
+                val stuCommaM = Pattern.compile("(\\d{1,2}(?:,\\d{1,2})+)").matcher(l)
+                while (stuCommaM.find()) {
+                    for (part in stuCommaM.group(1)!!.split(",")) {
+                        val seqNum = part.toIntOrNull() ?: continue
+                        if (seqNum in 1..30) stuSeqs.add(seqNum)
+                    }
+                }
+                // 단일 순번: 숫자+비숫자 패턴
+                val stuSeqM = Pattern.compile("(\\d{1,2})(?![억만원천년,])[A-Za-z\uFF21-\uFF3A\uFF41-\uFF5A가-힣]").matcher(l)
                 while (stuSeqM.find()) {
                     val seqNum = stuSeqM.group(1)!!.toInt()
-                    if (seqNum in 1..30) {
-                        if (l.contains("취업")) {
-                            studentLoanExcludedSeqs.add(seqNum)
-                            Log.d("HWP_PRESCAN", "학자금 취업후상환 순번: $seqNum - ${rawLine.trim()}")
-                        } else {
-                            studentLoanGeneralSeqs.add(seqNum)
-                            Log.d("HWP_PRESCAN", "학자금 일반상환 순번: $seqNum - ${rawLine.trim()}")
-                        }
+                    if (seqNum in 1..30) stuSeqs.add(seqNum)
+                }
+                for (seqNum in stuSeqs) {
+                    if (isAfterEmployment) {
+                        studentLoanExcludedSeqs.add(seqNum)
+                        Log.d("HWP_PRESCAN", "학자금 취업후상환 순번: $seqNum - ${rawLine.trim()}")
+                    } else {
+                        studentLoanGeneralSeqs.add(seqNum)
+                        Log.d("HWP_PRESCAN", "학자금 일반상환 순번: $seqNum - ${rawLine.trim()}")
                     }
                 }
             }
