@@ -878,11 +878,7 @@ class MainActivity : AppCompatActivity() {
         pdfExcludedOtherDebt = excludedDamboTotal
         Log.d("FILE_PROCESS", "합의서 채권사: ${pdfAgreementCreditors.size}건 $pdfAgreementCreditors")
 
-        val totalMan = (totalPrincipal / 10000).toInt()
-        if (totalMan > 0) {
-            pdfAgreementDebt = totalMan
-            Log.d("FILE_PROCESS", "합의서 대상채무: 합계행 ${totalMan}만 (채권사 ${pdfAgreementCreditors.size}건)")
-        }
+        Log.d("FILE_PROCESS", "합의서 대상채무: ${pdfAgreementDebt}만 (채권사 ${pdfAgreementCreditors.size}건)")
 
         // 제외채무가 비어있으면 → 전체 페이지로 최대 3번 재시도
         if ((excludedCreditorsArr == null || excludedCreditorsArr.length() == 0) && bitmaps.size >= 2) {
@@ -1697,7 +1693,7 @@ class MainActivity : AppCompatActivity() {
             if (l.contains("대출과목") || (l.contains("현황순번") && l.contains("담보"))) preScanLoanCat = true
             // 종료 조건: "대출과목"이 같은 라인에 없을 때만 (병합 라인 "[요약][대출과목]" 대응)
             if (preScanLoanCat && !l.contains("대출과목") && !l.contains("현황순번") && (l.contains("요약사항") || l.contains("최저납부") || l.contains("요약]") || l.contains("기타채무"))) preScanLoanCat = false
-            if (preScanLoanCat && (l.contains("담보") || l.contains("할부") || l.contains("리스") || l.contains("중도금") || l.contains("약관") || l.contains("후순위") || l.contains("보증금") || l.contains("전세"))) {
+            if (preScanLoanCat && (l.contains("담보") || l.contains("할부") || l.contains("리스") || l.contains("중도금") || l.contains("약관") || l.contains("후순위") || l.contains("보증금") || l.contains("전세") || l.contains("채무아님"))) {
                 // 콤마 구분 순번 감지: "7,8" "6,10" 등
                 val commaSeqM = Pattern.compile("(\\d{1,2}(?:,\\d{1,2})+)").matcher(l)
                 while (commaSeqM.find()) {
@@ -3379,7 +3375,7 @@ class MainActivity : AppCompatActivity() {
                 if (loanCatSeqM.find()) {
                     val seqStr = loanCatSeqM.group(1)!!
                     val seqNum = seqStr.toInt()
-                    val isDambo = lineNoSpace.contains("담보") || lineNoSpace.contains("할부") || lineNoSpace.contains("리스") || lineNoSpace.contains("약관")
+                    val isDambo = lineNoSpace.contains("담보") || lineNoSpace.contains("할부") || lineNoSpace.contains("리스") || lineNoSpace.contains("약관") || lineNoSpace.contains("채무아님")
                     if (isDambo) {
                         excludedSeqNumbers.add(seqNum)
                         Log.d("HWP_PARSE", "대출과목 담보 순번 감지: 순번$seqNum - $line")
@@ -3387,7 +3383,7 @@ class MainActivity : AppCompatActivity() {
                     // 대출과목 행 수집 (표시용)
                     val afterSeq = lineNoSpace.substring(seqStr.length).trim()
                     if (afterSeq.isNotEmpty()) {
-                        val dkM = Pattern.compile("((?:차량|자동차|주택|보증서|집)?담보|(?:차량)?할부|(?:차량)?리스|약관|신용|카드론|현금서비스)").matcher(afterSeq)
+                        val dkM = Pattern.compile("((?:차량|자동차|주택|보증서|집)?담보|(?:차량)?할부|(?:차량)?리스|약관|신용|카드론|현금서비스|채무아님)").matcher(afterSeq)
                         if (dkM.find()) {
                             val creditor = afterSeq.substring(0, dkM.start()).trim()
                             val damboKeyword = dkM.group(1)!!  // 키워드만 추출 (뒤 날짜/금액 제외)
@@ -3651,8 +3647,8 @@ class MainActivity : AppCompatActivity() {
 
             // 합의서 대상채무 + 제외 보증서 + 신청일자 이후 추가채무 + 카드이용금액
             if (pdfAgreementDebt > 0) {
-                targetDebt = pdfAgreementDebt + pdfExcludedGuaranteeDebt + postApplicationDebtMan + parsedCardUsageTotal
-                Log.d("HWP_PARSE", "합의서+한글 대상채무 합산: 합의서=${pdfAgreementDebt}만 + 제외보증서=${pdfExcludedGuaranteeDebt}만 + 신청이후=${postApplicationDebtMan}만 + 카드=${parsedCardUsageTotal}만 = ${targetDebt}만")
+                targetDebt = pdfAgreementDebt + pdfExcludedGuaranteeDebt + postApplicationDebtMan + parsedCardUsageTotal + telecomDebt
+                Log.d("HWP_PARSE", "합의서+한글 대상채무 합산: 합의서=${pdfAgreementDebt}만 + 제외보증서=${pdfExcludedGuaranteeDebt}만 + 신청이후=${postApplicationDebtMan}만 + 카드=${parsedCardUsageTotal}만 + 통신=${telecomDebt}만 = ${targetDebt}만")
             }
         } else if (pdfAgreementDebt > 0) {
             // PDF 채권사 목록 없이 대상채무만 있는 경우
@@ -5238,9 +5234,12 @@ class MainActivity : AppCompatActivity() {
                 baseDiag = baseDiag.substring(1)
             }
             val isSaeBaseDiag = baseDiag.startsWith("새새") || baseDiag.startsWith("회새") || baseDiag.startsWith("새")
-            if (isSaeBaseDiag) {
-                // 새새/회새/새 진단은 진행중 제도 prefix 없이 그대로 유지
+            if (isSaeBaseDiag && ongoingProcessName != "새") {
+                // 새새/회새/새 진단은 진행중 제도 prefix 없이 그대로 유지 (단, 진행중이 새출발이면 (새) prefix 추가)
                 diagnosis = baseDiag
+            } else if (isSaeBaseDiag && ongoingProcessName == "새") {
+                // 새출발 진행중 + 새 계열 진단 → (새)새, (새)회새, (새)새새
+                diagnosis = "(새)$baseDiag"
             } else if (aiDefermentMonths > 0) {
                 // 유예 중복 제거: 워유워→워, 유워→워
                 if (baseDiag.startsWith("워유워")) baseDiag = baseDiag.removePrefix("워유")
