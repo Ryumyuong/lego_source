@@ -1876,11 +1876,15 @@ class MainActivity : AppCompatActivity() {
                         regionSpouseProperty = maxOf((regionSise - regionLoan) / 2, 0)
                         Log.d("HWP_PARSE", "지역 배우자명의 감지: 시세${regionSise}만 - 대출${regionLoan}만 → ÷2 = ${regionSpouseProperty}만")
                     }
-                    // 월세 감지
-                    if (lineNoSpace.contains("월세")) hasWolse = true
-                    // 월세 보증금 → 재산 (배우자명의면 ÷2)
-                    if (lineNoSpace.contains("월세") && lineNoSpace.contains("보증금")) {
-                        val bojung = extractAmountAfterKeyword(line, "보증금")
+                    // 월세 감지 + 보증금 → 재산 (배우자명의면 ÷2)
+                    if (lineNoSpace.contains("월세")) {
+                        hasWolse = true
+                        // "월세 보증금 XXX만" 또는 "월세 XXX만/YYY만" 형식에서 보증금 추출
+                        val bojung = if (lineNoSpace.contains("보증금")) {
+                            extractAmountAfterKeyword(line, "보증금")
+                        } else {
+                            extractAmountAfterKeyword(line, "월세")
+                        }
                         if (bojung > 0) {
                             rentalDeposit += bojung
                             val appliedBojung = if (regionOwnership == "배우자") bojung / 2 else bojung
@@ -4526,12 +4530,12 @@ class MainActivity : AppCompatActivity() {
         // 차량 처분시 장기 가능 여부 (재산초과 해소 + 차량조건 해소, 채무한도초과면 불가)
         var canLongTermAfterCarSale = false
         if ((longTermPropertyExcess || longTermCarBlockedEffective) && carValue > 0 && !longTermDebtOverLimit) {
-            val propertyAfterCarSale = netProperty  // 차량 순가치는 AI 재산에 이미 포함
+            val propertyAfterCarSale = netProperty  // 차량 매도 시 현금으로 전환되므로 재산 총액 동일
             var netAfterExemption = propertyAfterCarSale - exemptionAmount
             if (netAfterExemption < 0) netAfterExemption = 0
-            val propertyOk = netAfterExemption <= targetDebt
+            val propertyOk = netAfterExemption <= targetDebtExGuarantee
             canLongTermAfterCarSale = propertyOk
-            Log.d("HWP_CALC", "차량 처분시: 재산=$propertyAfterCarSale, 공제후=$netAfterExemption, 대상채무=$targetDebt, 재산OK=$propertyOk → $canLongTermAfterCarSale")
+            Log.d("HWP_CALC", "차량 처분시: 재산=$propertyAfterCarSale, 공제후=$netAfterExemption, 대상채무=$targetDebtExGuarantee, 재산OK=$propertyOk → $canLongTermAfterCarSale")
         }
 
         var isBangsaeng = false
@@ -4660,7 +4664,7 @@ class MainActivity : AppCompatActivity() {
         val effectiveShortTermBlocked = shortTermBlocked && !shortTermCarSaleApplied
         val isDanSunYuri = !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && finalLongTermTotal - shortTermTotal > 1000
         val shortTermBlockedByDischarge = effectiveShortTermBlocked && dischargeWithin5Years && !dischargeEndsSameYear
-        val lowIncome = parsedMonthlyIncome <= 100  // 소득 100만 이하 → 회생 불가
+        val lowIncome = income <= 100  // 소득 100만 이하 → 회생 불가
         val hoeBlocked = shortTermBlockedByDischarge || shortTermDebtOverLimit || hasHfcMortgage || lowIncome || spouseSecret  // 회(개인회생) 불가: 면책 or 채무한도초과 or 한국주택금융공사 or 소득100만이하 or 배우자모르게
         val isDischargeBanned = dischargeWithin5Years || hasHfcMortgage  // 면책5년이내 or 한국주택금융공사
         val hoeBlockedForSae = shortTermBlockedByDischarge || hasHfcMortgage  // 새새 진단용: 면책5년이내/한국주택금융공사만 회새 차단
@@ -4927,7 +4931,7 @@ class MainActivity : AppCompatActivity() {
                 val amountMan = (amountChon + 5) / 10
                 remainingMan -= amountMan
                 if (remainingMan < 0) remainingMan = 0
-                val newRatio = remainingMan.toDouble() / targetDebt * 100
+                val newRatio = remainingMan.toDouble() / totalDebtForRatio * 100
                 if (newRatio < 30) {
                     val thresholdCal = date.clone() as Calendar
                     thresholdCal.add(Calendar.MONTH, 6)
@@ -4954,33 +4958,24 @@ class MainActivity : AppCompatActivity() {
                         diagnosis = "$immediatePrefix$afterDiag $possibleDate 이후 가능$immediateNote$cdNote"
                     }
                     diagnosisNote = ""
-                    Log.d("HWP_CALC", "6개월 30%미만 가능일: $possibleDate (남은 ${remainingMan}만/${targetDebt}만=${String.format("%.1f", newRatio)}%)")
+                    Log.d("HWP_CALC", "6개월 30%미만 가능일: $possibleDate (남은 ${remainingMan}만/${totalDebtForRatio}만=${String.format("%.1f", newRatio)}%)")
                     break
                 }
             }
         }
 
-        // 단순유리 + 6개월 30% → X개월 이후 단순 유리
-        if (diagnosis == "단순유리" && recentDebtRatio >= 30 && recentDebtEntries.isNotEmpty() && targetDebt > 0) {
-            findThresholdDate(recentDebtEntries, recentDebtMan, targetDebt)?.let { pd ->
-                val parts = pd.split("."); val now = Calendar.getInstance()
-                val months = maxOf((parts[0].toInt() - now.get(Calendar.YEAR)) * 12 + (parts[1].toInt() - 1 - now.get(Calendar.MONTH)), 1)
-                diagnosis = "${months}개월 이후 단순 유리"; diagnosisNote = ""
-                Log.d("HWP_CALC", "단순유리 + 6개월 30%: ${months}개월 이후 단순 유리")
-            }
-        }
+        val practicalShortTermBlocked = spouseSecret || isIncomeEstimated
 
         // 단순유리 + 장기 가능 → 회워 바로 가능 + 연체별 날짜 추가
         // 단, 단기총액+1000 < 장기총액이면 단순유리 유지 (단기가 확실히 유리)
         // ★ 배우자 모르게, 소득 예정 등 단기 불가 조건 시 단기 우위 비교 무시 → 장기로 진행
-        val practicalShortTermBlocked = spouseSecret || isIncomeEstimated
         val singleCreditorDanSun = creditorCount == 1 && !isShinbokSingleCreditor && !hasPdfFile
-        if (diagnosis.startsWith("단순") && !longTermFullyBlocked && finalYear > 0 && !singleCreditorDanSun
+        if (diagnosis.startsWith("단순") && !longTermFullyBlocked && (finalYear > 0 || practicalShortTermBlocked) && !singleCreditorDanSun
             && !(diagnosis == "단순유리" && !practicalShortTermBlocked && shortTermTotal > 0 && finalLongTermTotal - shortTermTotal > 1000)) {
             // 면책 5년 이내 또는 배우자 모르게 등 실질 단기 불가 → 장기 진단 기반
             // 단, 대상채무 4000만 이하면 회생도 가능 (유→회), hoeBlocked는 중간 회 불가
             // 면책5년이내/한국주택금융공사는 회생접수 자체 불가 → 회워도 불가
-            val useYu = isDischargeBanned || hoeBlocked || (isIncomeEstimated && targetDebt > 4000)
+            val useYu = isDischargeBanned || hoeBlocked
             diagnosis = if (dischargeWithin5Years || practicalShortTermBlocked) {
                 when {
                     delinquentDays >= 90 -> if (isDischargeBanned) "워유워" else "회워"
@@ -5000,8 +4995,13 @@ class MainActivity : AppCompatActivity() {
                     delinquentDays >= 30 -> "프유회"
                     else -> "신유회"
                 }
-                findThresholdDate(recentDebtEntries, recentDebtMan, targetDebt)?.let { pd ->
-                    diagnosis += ", $longDiag $pd 이후 가능"
+                findThresholdDate(recentDebtEntries, recentDebtMan, totalDebtForRatio)?.let { pd ->
+                    if (isDanSunYuri && practicalShortTermBlocked) {
+                        // 단순유리 조건인데 소득 예정/배우자 모르게 → 신유회만 표시
+                        diagnosis = "$longDiag $pd 이후 가능"
+                    } else {
+                        diagnosis += ", $longDiag $pd 이후 가능"
+                    }
                 }
             }
         }
@@ -5028,7 +5028,7 @@ class MainActivity : AppCompatActivity() {
         if ((diagnosis == "새새" || diagnosis == "새" || diagnosis == "회새" || diagnosis.startsWith("새새 ") || diagnosis.startsWith("새 ") || diagnosis.startsWith("회새 ")) && diagnosis.contains("이후 가능")) {
             if (needsCarDisposal && canAfterCarDisposal && !diagnosis.contains("차량 처분")) {
                 diagnosis += ", 차량 처분 후 바로 가능"
-            } else if (!needsCarDisposal && !diagnosis.contains("회새")) {
+            } else if (!needsCarDisposal && !diagnosis.contains("회새") && !hoeBlockedForSae) {
                 diagnosis += ", 회새 가능"
             }
         }
@@ -5121,7 +5121,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (nonAffiliatedOver20) longTermBlockReasons.add("미협약 초과")
         if (longTermPropertyExcess || propertyExcessWithGuarantee) longTermBlockReasons.add("재산초과")
-        if (longTermCarBlockedEffective) longTermBlockReasons.add("차량조건불가")
+        if (longTermCarBlockedEffective && !longTermPropertyExcess && !propertyExcessWithGuarantee) longTermBlockReasons.add("차량조건불가")
         if (allDebtIsGuarantee) longTermBlockReasons.add("지급보증채무")
         if (hasAuction) longTermBlockReasons.add("경매 진행중")
         if (isBangsaeng && bangsaengReason.isNotEmpty() && longTermBlockReasons.none { it.contains(bangsaengReason) }) longTermBlockReasons.add(bangsaengReason)
@@ -5184,7 +5184,7 @@ class MainActivity : AppCompatActivity() {
 
         // 새새 변환 후 6개월 30% 날짜가 빠진 경우 추가
         if ((diagnosis == "새새" || diagnosis == "새" || diagnosis == "회새") && recentDebtRatio >= 30 && recentDebtEntries.isNotEmpty() && targetDebt > 0) {
-            findThresholdDate(recentDebtEntries, recentDebtMan, targetDebt)?.let { pd ->
+            findThresholdDate(recentDebtEntries, recentDebtMan, totalDebtForRatio)?.let { pd ->
                 diagnosis = "$diagnosis $pd 이후 가능"
                 Log.d("HWP_CALC", "새새 변환 후 6개월 날짜 추가: $pd")
             }
@@ -5213,7 +5213,7 @@ class MainActivity : AppCompatActivity() {
             }
             // 단순유리→신유워 등 변환 후 6개월 30% 날짜 계산
             if (recentDebtRatio >= 30 && recentDebtEntries.isNotEmpty() && targetDebt > 0) {
-                findThresholdDate(recentDebtEntries, recentDebtMan, targetDebt)?.let { pd ->
+                findThresholdDate(recentDebtEntries, recentDebtMan, totalDebtForRatio)?.let { pd ->
                     if (!(suffix == "워" && !dischargeWithin5Years)) diagnosis = "$diagnosis $pd 이후 가능"
                     Log.d("HWP_CALC", "단순유리 변환 후 6개월 날짜: $pd")
                 }
@@ -5223,7 +5223,7 @@ class MainActivity : AppCompatActivity() {
 
         // 미협약 초과 + 단순유리 + 6개월 30% → 날짜만 추가 (신유회 변환 없이)
         if (diagnosis == "단순유리" && nonAffiliatedOver20 && recentDebtRatio >= 30 && recentDebtEntries.isNotEmpty() && targetDebt > 0) {
-            findThresholdDate(recentDebtEntries, recentDebtMan, targetDebt)?.let { pd ->
+            findThresholdDate(recentDebtEntries, recentDebtMan, totalDebtForRatio)?.let { pd ->
                 diagnosis = "단순유리"
                 Log.d("HWP_CALC", "미협약 초과 + 단순유리 (6개월 날짜 생략: $pd)")
             }
