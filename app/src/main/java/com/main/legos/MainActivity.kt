@@ -77,6 +77,8 @@ class MainActivity : AppCompatActivity() {
     private var pdfExcludedDamboCreditors = mutableSetOf<String>()  // 제외된 담보 채권사명 (290 판단용)
     private data class PdfExcludedEntry(val seq: Int, val name: String, val principal: Int, val reason: String, val isDambo: Boolean)
     private var pdfExcludedEntries = mutableListOf<PdfExcludedEntry>()  // 제외 채무 목록 (표시용)
+    private data class PdfOutsideEntry(val name: String, val principal: Int)  // 협약 외 채무 (이름, 원금만원)
+    private var pdfOutsideEntries = mutableListOf<PdfOutsideEntry>()  // 협약 외 채무 목록
     private var pdfRecoveryDebt = 0            // 변제계획안 대상채무 (만원)
     private var pdfRecoveryIncome = 0          // 변제계획안 월변제금 (만원)
     private var pdfRecoveryMonths = 0          // 변제계획안 변제기간 (개월)
@@ -772,9 +774,14 @@ class MainActivity : AppCompatActivity() {
 - "■ 개인채무조정에서 제외된 채무내역" 또는 "■ 제외채무 내역"이라는 ■ 마크가 있는 제목 아래에 있음
 - 컬럼: 채권금융회사 | 대출과목 | 계좌번호 | 원금 | 이자 | 비용 | 제외사유
 - 제외사유 예시: "개별상환(보증서 담보대출)", "개별상환(자동차 담보대출)", "소액 채무", "새출발기금 매입예정"
+- ★ 단위 주의: 표 상단/하단의 "(단위: 원)" / "(단위: 천원)" / "(단위: 만원)" 표기를 반드시 확인.
+  - 단위가 천원이면 → 표시값 × 1000 으로 변환 (예: 표에 "8,700" + 단위 천원 → 8700000원)
+  - 단위가 만원이면 → 표시값 × 10000 으로 변환 (예: 표에 "870" + 단위 만원 → 8700000원)
+  - 단위가 원이거나 단위 표기가 없으면 → 표시값 그대로 (예: 표에 "8,700,000" → 8700000원)
+  - 단위가 모호하면 [2]번 totalPrincipal과 비교해서 단위 추정 (이 합의서의 totalPrincipal과 동일한 단위 사용)
 - excludedCreditors: 각 행에서 추출 (reason 필드는 반드시 포함!)
   - name: 채권금융회사명
-  - principal: 원금 (원 단위)
+  - principal: 원금을 반드시 "원 단위"로 변환한 값 (천원/만원이면 변환 필수)
   - reason: 제외사유 컬럼의 값을 반드시 읽어서 변환. 이 필드는 필수!
     "자동차 담보" 포함 → "차량담보대출", "보증서 담보" 포함 → "보증서담보대출",
     "주택 담보"/"주택담보" 포함 → "주택담보대출", "현금서비스" 포함 → "현금서비스",
@@ -784,8 +791,29 @@ class MainActivity : AppCompatActivity() {
 
 [4] 유예기간: "유예기간"/"거치기간" (개월 수, 없으면 0)
 
+[5] "협약 외 채무내역" / "협약 외 채권자" / "기타 협약외" / "협약외 채무" 테이블 ← [3]번과 완전히 다른 테이블!
+★ [3]번과의 차이 (절대 혼동 금지):
+  - [3] excludedCreditors = "■ 개인채무조정에서 제외된 채무내역" (제외사유 컬럼이 있음, 신복위 채무 중 일부를 제외한 것)
+  - [5] outsideCreditors = "협약 외 채무" (제외사유 컬럼 없음, 신복위와 무관한 제3자 채무 - 주로 대부업체)
+  - 같은 채권사를 양쪽에 넣지 말 것! 한 채무는 둘 중 한 곳에만 들어감
+  - 제외사유에 "개별상환"이 있으면 → 무조건 [3] excludedCreditors (outsideCreditors 아님!)
+  - 채권사명에 "대부"/"기타협약외" 포함되거나 "협약 외" 섹션에만 있으면 → [5] outsideCreditors
+- 위치: "■ 협약 외 채무내역" 같은 ■ 마크 또는 "협약 외" 섹션 제목 아래. 본문 후반부
+- 컬럼명 변형: "협약 외 채권자" / "채권금융회사" / "채권자명" / "기타협약외 채권자", 금액 컬럼은 "원금" / "잔액"
+- 행 형식: "1 [채권사명] [대출종류] [원금]" 또는 "기타협약외( 주식회사에스씨알대부 ) [원금]"
+- ★ 채권자명 정제 (반드시 괄호 안의 진짜 채권사명 추출):
+  - "기타협약외( 주식회사에스씨알대부 )" → "에스씨알대부" (절대 "기타협약외" 자체를 채권사명으로 쓰지 말 것!)
+  - "(주)에이비대부" → "에이비대부"
+  - 제거 대상 prefix: "기타협약외(", "기타협약외", "협약외(", "기티협약외" 등
+  - 제거 대상 법인 표기: "주식회사", "유한회사", "(주)", "㈜", 양 끝 괄호와 공백
+- ★ 단위 주의: [3]번과 동일 — 표의 "(단위: 원/천원/만원)" 표기 확인 후 반드시 원 단위로 변환
+  - 단위 천원 → ×1000, 단위 만원 → ×10000, 단위 원 → 그대로
+  - 단위가 모호하면 [2]번 totalPrincipal과 동일한 단위 사용
+- outsideCreditors: 각 행에서 name(정제된 채권사명), principal(반드시 원 단위로 변환한 값) 추출
+- "협약 외" 섹션이 진짜로 없을 때만 빈 배열. "협약 외" 단어가 본문에 한 번이라도 나오면 그 주변 테이블을 반드시 확인할 것
+
 반드시 JSON만 응답 (마크다운 코드블록 없이):
-{"processType": "신/프/워/빈문자열", "processTitle": "제목원문", "totalPrincipal": 숫자, "excludedDebtTotal": 숫자, "defermentMonths": 숫자, "creditors": [{"name": "채권사명", "principal": 숫자}], "excludedCreditors": [{"name": "채권사명", "principal": 숫자, "reason": "사유"}]}"""
+{"processType": "신/프/워/빈문자열", "processTitle": "제목원문", "totalPrincipal": 숫자, "excludedDebtTotal": 숫자, "defermentMonths": 숫자, "creditors": [{"name": "채권사명", "principal": 숫자}], "excludedCreditors": [{"name": "채권사명", "principal": 숫자, "reason": "사유"}], "outsideCreditors": [{"name": "채권사명", "principal": 숫자}]}"""
 
         val aiText = callClaudeVisionApi(prompt, bitmaps, fileName, "합의서")
         if (aiText.isEmpty()) return
@@ -876,6 +904,25 @@ class MainActivity : AppCompatActivity() {
         }
         pdfExcludedGuaranteeDebt = excludedGuaranteeTotal
         pdfExcludedOtherDebt = excludedDamboTotal
+
+        // 협약 외 채무내역 파싱
+        pdfOutsideEntries.clear()
+        val outsideCreditorsArr = data.optJSONArray("outsideCreditors")
+        if (outsideCreditorsArr != null) {
+            for (i in 0 until outsideCreditorsArr.length()) {
+                val c = outsideCreditorsArr.optJSONObject(i) ?: continue
+                val cName = c.optString("name", "").trim()
+                val cPrincipal = (c.optLong("principal", 0L) / 10000).toInt()
+                if (cName.length >= 2 && cPrincipal > 0) {
+                    pdfOutsideEntries.add(PdfOutsideEntry(cName, cPrincipal))
+                    Log.d("FILE_PROCESS", "협약 외 채무: $cName ${cPrincipal}만 (담보/신용은 한글파일에서 판단)")
+                }
+            }
+            if (pdfOutsideEntries.isNotEmpty()) {
+                Log.d("FILE_PROCESS", "협약 외 채무 합계: ${pdfOutsideEntries.sumOf { it.principal }}만 (${pdfOutsideEntries.size}건)")
+            }
+        }
+
         Log.d("FILE_PROCESS", "합의서 채권사: ${pdfAgreementCreditors.size}건 $pdfAgreementCreditors")
 
         Log.d("FILE_PROCESS", "합의서 대상채무: ${pdfAgreementDebt}만 (채권사 ${pdfAgreementCreditors.size}건)")
@@ -960,6 +1007,76 @@ class MainActivity : AppCompatActivity() {
                     break  // 성공하면 루프 종료
                 } else {
                     Log.d("FILE_PROCESS", "제외채무 ${retryNum}차 추출: 테이블 없음 ($fileName)")
+                }
+            }
+        }
+
+        // 협약 외 채무가 비어있으면 → 페이지를 나눠서 최대 3번 재시도 (전담 호출)
+        if (pdfOutsideEntries.isEmpty() && bitmaps.size >= 2) {
+            val pageBatches = mutableListOf<List<Bitmap>>()
+            val batchSize = 4
+            for (start in 0 until bitmaps.size step (batchSize - 1).coerceAtLeast(1)) {
+                val end = minOf(start + batchSize, bitmaps.size)
+                pageBatches.add(bitmaps.subList(start, end))
+            }
+
+            for (retryNum in 1..pageBatches.size.coerceAtMost(3)) {
+                val batch = pageBatches[retryNum - 1]
+                val outsidePrompt = """이 이미지들은 채무조정 체결합의서 PDF의 일부 페이지(${batch.size}장)입니다.
+
+"■ 협약 외 채무내역" 또는 "협약 외 채권자" 라는 제목의 테이블을 찾으세요.
+이 테이블은 "■ 개인채무조정에서 제외된 채무내역"과는 완전히 다른 별도 테이블입니다.
+
+이 테이블의 컬럼: 협약외 채권자 | 원금 | 비고
+표 상단에 "(단위: 원)"이 표기되어 있으면 원금은 그대로 원 단위 숫자
+
+★ 숫자 읽기 주의:
+- "70,000,000" → 70000000 (콤마 무시하고 모든 숫자 그대로)
+- "8,700,000" → 8700000
+- 콤마 뒤 숫자를 절대 누락하지 말 것
+
+각 행에서 추출:
+- name: ★ 반드시 괄호 안의 진짜 채권사명만 추출 (절대 "기타협약외"를 채권사명으로 쓰지 말 것!)
+  - "기타협약외( 주식회사에스씨알대부 )" → "에스씨알대부"
+  - 제거 대상: "기타협약외(", "기타협약외", "협약외(", "기티협약외" 등 prefix
+  - 제거 대상: "주식회사", "유한회사", "(주)", "㈜" 등 법인 표기
+  - 양 끝 괄호와 공백 제거
+- principal: 원금 (콤마 무시한 전체 원 단위 숫자)
+
+★ 절대 [개인채무조정에서 제외된 채무내역] 테이블의 행을 읽지 말 것!
+   - 그 테이블에는 "제외사유" 컬럼이 있고, 이 협약외 테이블에는 없음
+   - 그 테이블의 채권사는 일반 은행/저축은행, 협약외 테이블은 주로 "대부업체"
+
+테이블이 없으면 빈 배열을 응답하세요.
+반드시 JSON만 응답 (마크다운 코드블록 없이):
+{"outsideCreditors": [{"name": "채권사명", "principal": 숫자}]}"""
+
+                Log.d("FILE_PROCESS", "합의서 협약외채무 비어있음 → 페이지배치 ${retryNum}/${pageBatches.size.coerceAtMost(3)} (${batch.size}장) ($fileName)")
+                val retryText = callClaudeVisionApi(outsidePrompt, batch, fileName, "협약외채무(${retryNum}차)")
+                if (retryText.isEmpty()) continue
+                val retryJson = retryText.replace(Regex("```json\\s*"), "").replace(Regex("```\\s*"), "").trim()
+                val rStart = retryJson.indexOf("{")
+                val rEnd = retryJson.lastIndexOf("}")
+                if (rStart == -1 || rEnd <= rStart) continue
+                val retryData = JSONObject(retryJson.substring(rStart, rEnd + 1))
+                val retryArr = retryData.optJSONArray("outsideCreditors")
+                if (retryArr != null && retryArr.length() > 0) {
+                    Log.d("FILE_PROCESS", "협약외채무 ${retryNum}차 추출 성공: ${retryArr.length()}건")
+                    for (i in 0 until retryArr.length()) {
+                        val c = retryArr.optJSONObject(i) ?: continue
+                        val cName = c.optString("name", "").trim()
+                        val cPrincipal = (c.optLong("principal", 0L) / 10000).toInt()
+                        if (cName.length >= 2 && cPrincipal > 0) {
+                            pdfOutsideEntries.add(PdfOutsideEntry(cName, cPrincipal))
+                            Log.d("FILE_PROCESS", "협약 외 채무(${retryNum}차): $cName ${cPrincipal}만")
+                        }
+                    }
+                    if (pdfOutsideEntries.isNotEmpty()) {
+                        Log.d("FILE_PROCESS", "협약 외 채무 합계: ${pdfOutsideEntries.sumOf { it.principal }}만 (${pdfOutsideEntries.size}건)")
+                        break
+                    }
+                } else {
+                    Log.d("FILE_PROCESS", "협약외채무 ${retryNum}차 추출: 테이블 없음 ($fileName)")
                 }
             }
         }
@@ -1590,6 +1707,8 @@ class MainActivity : AppCompatActivity() {
         val jilgwonXCreditors = mutableSetOf<String>()  // 질권설정x 채권사 (담보→대상채무 포함)
         var excludedSeqNumbers = mutableSetOf<Int>()  // 대출과목에서 제외할 순번
         var includedSeqNumbers = mutableSetOf<Int>()  // 강제 포함할 순번 (순번N 신용대출)
+        val loanCatDamboCreditorNames = mutableSetOf<String>()  // 대출과목에서 담보 키워드와 함께 등장한 채권사명 (순번 매칭 실패 시 이름 매칭용)
+        val loanCatCreditCreditorNames = mutableSetOf<String>()  // 대출과목에서 "신용"으로 명시된 채권사명 (담보 분류 무효화용)
         var hasOngoingProcess = false  // 다른 채무조정 진행 중
         var ongoingProcessName = ""   // 진행중인 제도명 (회/신/워)
         var isIncomeEstimated = false  // 소득 예상
@@ -1705,7 +1824,13 @@ class MainActivity : AppCompatActivity() {
             if (l.contains("대출과목") || (l.contains("현황순번") && l.contains("담보"))) preScanLoanCat = true
             // 종료 조건: "대출과목"이 같은 라인에 없을 때만 (병합 라인 "[요약][대출과목]" 대응)
             if (preScanLoanCat && !l.contains("대출과목") && !l.contains("현황순번") && (l.contains("요약사항") || l.contains("최저납부") || l.contains("요약]") || l.contains("기타채무"))) preScanLoanCat = false
+            // 대출과목 섹션 내 "신용" 표기 라인 → 해당 채권사명 수집 (담보 분류 무효화용)
+            if (preScanLoanCat && l.contains("신용") && !l.contains("담보") && !l.contains("할부") && !l.contains("리스")) {
+                extractLoanCatCreditorNames(l, loanCatCreditCreditorNames)
+            }
             if (preScanLoanCat && (l.contains("담보") || l.contains("할부") || l.contains("리스") || l.contains("중도금") || l.contains("약관") || l.contains("후순위") || l.contains("보증금") || l.contains("전세") || l.contains("채무아님"))) {
+                // 채권사명 추출 (순번이 없는 라인에서도 이름 매칭으로 담보 처리)
+                extractLoanCatCreditorNames(l, loanCatDamboCreditorNames)
                 // 콤마 구분 순번 감지: "7,8" "6,10" 등
                 val commaSeqM = Pattern.compile("(\\d{1,2}(?:,\\d{1,2})+)").matcher(l)
                 while (commaSeqM.find()) {
@@ -1784,10 +1909,13 @@ class MainActivity : AppCompatActivity() {
             }
 
             // 대출과목 섹션 감지 (조기 설정 → 차량/채무 파싱에서 제외용)
-            if (lineNoSpace.contains("대출과목") || lineNoSpace.contains("[대출과목]")) {
+            // prescan과 동일한 조건: "대출과목" 또는 ("현황순번" + "담보") 헤더 모두 진입
+            if (lineNoSpace.contains("대출과목") || lineNoSpace.contains("[대출과목]") ||
+                (lineNoSpace.contains("현황순번") && lineNoSpace.contains("담보"))) {
                 inLoanCategorySection = true
             }
-            if (inLoanCategorySection && !lineNoSpace.contains("대출과목") && (lineNoSpace.contains("요약사항") || lineNoSpace.contains("최저납부") || lineNoSpace.contains("요약]"))) {
+            if (inLoanCategorySection && !lineNoSpace.contains("대출과목") && !lineNoSpace.contains("현황순번") &&
+                (lineNoSpace.contains("요약사항") || lineNoSpace.contains("최저납부") || lineNoSpace.contains("요약]") || lineNoSpace.contains("기타채무"))) {
                 inLoanCategorySection = false
             }
 
@@ -2354,19 +2482,6 @@ class MainActivity : AppCompatActivity() {
                                     Log.d("HWP_PARSE", "월 순수익 직접 파싱: ${netMax}만 ($line)")
                                 }
                             }
-                            // 국민연금 등 추가 소득 합산
-                            val pensionMatch = Regex("(?:국민연금|기초연금|장애연금|노령연금|공무원연금|군인연금|유족연금|개인연금|실업급여)\\s*(\\d+)\\s*만").find(line)
-                            if (pensionMatch != null) {
-                                val pensionAmount = pensionMatch.groupValues[1].toInt()
-                                parsedMonthlyIncome += pensionAmount
-                                Log.d("HWP_PARSE", "연금 추가: ${pensionAmount}만 → 합계=${parsedMonthlyIncome}만")
-                            }
-                            // 월세수익 → 단기 소득에만 포함 (장기 소득 제외)
-                            val rentalMatch = Regex("월세수익\\s*(\\d+)\\s*만").find(line)
-                            if (rentalMatch != null) {
-                                rentalIncomeMan = rentalMatch.groupValues[1].toInt()
-                                Log.d("HWP_PARSE", "월세수익 감지: ${rentalIncomeMan}만 (단기 소득에만 포함)")
-                            }
                         }
                     } else {
                         // 괄호 안 금액 추출 (예: "연봉 5200만(369만)" → 369)
@@ -2427,6 +2542,18 @@ class MainActivity : AppCompatActivity() {
                                 Log.d("HWP_PARSE", "연봉→월소득 변환: 연봉${annualMatch!!.groupValues[1]}만 × 0.8 ÷ 12 = ${annualMonthly}만 → 합계=${parsedMonthlyIncome}만 ($line)")
                             }
                         }
+                    }
+                    // 연금/월세수익 추가 (순수익/월소득/연봉 어떤 분기든 공통 적용)
+                    val pensionMatch = Regex("(?:국민연금|기초연금|장애연금|노령연금|공무원연금|군인연금|유족연금|개인연금|실업급여)\\s*(\\d+)\\s*만").find(line)
+                    if (pensionMatch != null) {
+                        val pensionAmount = pensionMatch.groupValues[1].toInt()
+                        parsedMonthlyIncome += pensionAmount
+                        Log.d("HWP_PARSE", "연금 추가: ${pensionAmount}만 → 합계=${parsedMonthlyIncome}만 ($line)")
+                    }
+                    val rentalMatch = Regex("월세수익\\s*(\\d+)\\s*만").find(line)
+                    if (rentalMatch != null && rentalIncomeMan == 0) {
+                        rentalIncomeMan = rentalMatch.groupValues[1].toInt()
+                        Log.d("HWP_PARSE", "월세수익 감지: ${rentalIncomeMan}만 (단기 소득에만 포함)")
                     }
                 }
             }
@@ -3233,8 +3360,9 @@ class MainActivity : AppCompatActivity() {
             }
             if (loanYear > 0 && inDebtSection && !inSpecialNotesSection && !inPropertySection && !inRegionField) {
                 var debtAmount = 0
-                if (line.contains("만") || line.contains("억")) {
-                    debtAmount = extractAmount(line) * 10
+                val lastToken = line.trim().split(Regex("\\s+")).lastOrNull() ?: ""
+                if (Regex("\\d\\s*[만억]").containsMatchIn(lastToken)) {
+                    debtAmount = extractAmount(lastToken) * 10
                 } else {
                     val commaM = Pattern.compile("([\\d,]+)$").matcher(line.trim())
                     if (commaM.find()) {
@@ -3270,6 +3398,10 @@ class MainActivity : AppCompatActivity() {
                     val is290DamboByCategory = is290 && rowSeqNum > 0 && excludedSeqNumbers.contains(rowSeqNum)
                     // 대출과목에서 담보/할부로 확인된 순번 → 담보 처리
                     val isDamboByPreScan = rowSeqNum > 0 && excludedSeqNumbers.contains(rowSeqNum)
+                    // 대출과목 표 채권사명 매칭 (순번이 없는 표 형식 대응)
+                    val isDamboByLoanCatName = matchesLoanCatDambo(rawCreditorName, loanCatDamboCreditorNames)
+                    // 대출과목 표에서 "신용"으로 명시된 채권사명 → 담보 분류 무효화 (강제 신용)
+                    val isCreditByLoanCatName = matchesLoanCatDambo(rawCreditorName, loanCatCreditCreditorNames)
                     // PDF 제외 담보 채권사와 매칭 → (290) 담보 판단
                     val is290DamboByPdf = is290 && rawCreditorName.length >= 2 && pdfExcludedDamboCreditors.any { pdfName ->
                         val pdfNorm = pdfName.replace(Regex("\\(주\\)|\\(유\\)|주식회사|유한회사|[\\s\\(\\)]"), "")
@@ -3291,7 +3423,7 @@ class MainActivity : AppCompatActivity() {
                         Log.d("HWP_PARSE", "질권설정x → 담보 해제 (대상채무 포함): $rawCreditorName - $line")
                     }
                     val isJilgwonXOverride = jeonseNoJilgwon && (isJeonse270 || lineNoSpace.contains("보증금대출") || lineNoSpace.contains("보증금담보")) && !isJilgwonOCreditor
-                    val isDamboLoan = !isJilgwonXCreditor && !isJilgwonXOverride && ((lineFor담보.contains("담보") || is290DamboByCategory || is290DamboByPdf || isDamboByPreScan || lineNoSpace.contains("할부금융") || lineNoSpace.contains("리스") || lineNoSpace.contains("후순위") || lineNoSpace.contains("중고차할부") || lineNoSpace.contains("신차할부") || lineNoSpace.contains("차할부") || lineNoSpace.contains("차량할부") || lineNoSpace.contains("자동차할부") || lineNoSpace.contains("(500)") || lineNoSpace.contains("(510)") || lineNoSpace.contains("시설자금") || lineNoSpace.contains("(1071)") || lineNoSpace.contains("중도금") || lineNoSpace.contains("예적금") || lineNoSpace.contains("보증금대출") || lineNoSpace.contains("유가증권") || (isJeonse270 && (!jeonseNoJilgwon || isJilgwonOCreditor)) || isInsurancePolicyLoan) && !isGuaranteeLoan && !lineNoSpace.contains("(240)") && !lineNoSpace.contains("무담보") && !lineNoSpace.contains("마이너스"))
+                    val isDamboLoan = !isJilgwonXCreditor && !isJilgwonXOverride && !isCreditByLoanCatName && ((lineFor담보.contains("담보") || is290DamboByCategory || is290DamboByPdf || isDamboByPreScan || (is290 && isDamboByLoanCatName) || hasDamboKeyword(lineNoSpace) || (isJeonse270 && (!jeonseNoJilgwon || isJilgwonOCreditor)) || isInsurancePolicyLoan) && !isGuaranteeLoan && !lineNoSpace.contains("(240)") && !lineNoSpace.contains("무담보") && !lineNoSpace.contains("마이너스"))
 
                     // 지급보증(3021): 담보/비담보 전부 대상채무 제외
                     if (lineNoSpace.contains("(3021)")) {
@@ -3448,23 +3580,32 @@ class MainActivity : AppCompatActivity() {
                 }
                 // 대출과목에서 담보 순번 수집 (현황순번 + 담보 키워드)
                 val loanCatSeqM = Pattern.compile("^(\\d+)(?!년)").matcher(lineNoSpace)
-                if (loanCatSeqM.find()) {
-                    val seqStr = loanCatSeqM.group(1)!!
-                    val seqNum = seqStr.toInt()
+                // "제외N" 형식 감지 (협약 외 채무)
+                val excludeSeqM = Pattern.compile("^제외(\\d+)").matcher(lineNoSpace)
+                if (loanCatSeqM.find() || excludeSeqM.find()) {
+                    val isExcludeEntry = excludeSeqM.find(0)
+                    val seqStr = if (isExcludeEntry) "제외${excludeSeqM.group(1)}" else loanCatSeqM.group(1)!!
                     val isDambo = lineNoSpace.contains("담보") || lineNoSpace.contains("할부") || lineNoSpace.contains("리스") || lineNoSpace.contains("약관") || lineNoSpace.contains("채무아님")
-                    if (isDambo) {
-                        excludedSeqNumbers.add(seqNum)
-                        Log.d("HWP_PARSE", "대출과목 담보 순번 감지: 순번$seqNum - $line")
+                    if (!isExcludeEntry) {
+                        val seqNum = loanCatSeqM.group(1)!!.toInt()
+                        if (isDambo) {
+                            excludedSeqNumbers.add(seqNum)
+                            Log.d("HWP_PARSE", "대출과목 담보 순번 감지: 순번$seqNum - $line")
+                        }
                     }
                     // 대출과목 행 수집 (표시용)
                     val afterSeq = lineNoSpace.substring(seqStr.length).trim()
                     if (afterSeq.isNotEmpty()) {
-                        val dkM = Pattern.compile("((?:차량|자동차|주택|보증서|집)?담보|(?:차량)?할부|(?:차량)?리스|약관|신용|카드론|현금서비스|채무아님)").matcher(afterSeq)
+                        val dkM = Pattern.compile("((?:차량|자동차|주택|보증서|집)?담보(?:대출)?|(?:차량)?할부|(?:차량)?리스|약관|신용|카드론|현금서비스|채무아님)").matcher(afterSeq)
                         if (dkM.find()) {
                             val creditor = afterSeq.substring(0, dkM.start()).trim()
-                            val damboKeyword = dkM.group(1)!!  // 키워드만 추출 (뒤 날짜/금액 제외)
+                            val damboKeyword = dkM.group(1)!!
                             loanCatRows.add(LoanCatRow(seqStr, creditor, damboKeyword))
-                        } else loanCatRows.add(LoanCatRow(seqStr, afterSeq, ""))
+                            if (isExcludeEntry) Log.d("HWP_PARSE", "대출과목 협약외 감지: $seqStr $creditor ($damboKeyword) - $line")
+                        } else {
+                            loanCatRows.add(LoanCatRow(seqStr, afterSeq, ""))
+                            if (isExcludeEntry) Log.d("HWP_PARSE", "대출과목 협약외 감지: $seqStr $afterSeq - $line")
+                        }
                     }
                 }
                 // 대출과목에서 국세/지방세/세금 파싱
@@ -3743,6 +3884,32 @@ class MainActivity : AppCompatActivity() {
             targetDebt = pdfRecoveryDebt
         }
         // 변제계획안 월변제금은 단기 결과에서 직접 적용 (소득이 아님)
+
+        // ★ 협약 외 채무: 한글파일 대출과목 "제외N" 행으로 담보/신용 판단 (PDF 순서 = HWP 제외N 순서)
+        if (pdfOutsideEntries.isNotEmpty()) {
+            for ((idx, entry) in pdfOutsideEntries.withIndex()) {
+                val excludeKey = "제외${idx + 1}"
+                val matchedRow = loanCatRows.firstOrNull { it.seq == excludeKey }
+                val isDambo = matchedRow?.let {
+                    it.damboNote.contains("담보") || it.damboNote.contains("할부") || it.damboNote.contains("리스")
+                } ?: false
+                // 채권사명: HWP 매칭 행이 있고 PDF 이름이 부정확("기타협약외"/"기티협약외" 등 prefix 잔여)이면 HWP 이름 사용
+                val pdfNameLooksBad = entry.name.contains("협약외") || entry.name.contains("기타") || entry.name.length < 3
+                val finalName = if (matchedRow != null && matchedRow.creditor.length >= 2 && pdfNameLooksBad) {
+                    matchedRow.creditor
+                } else entry.name
+                if (isDambo) {
+                    parsedDamboTotal += entry.principal
+                    parsedDamboCreditorNames.add(finalName)
+                    parsedDamboCreditorMap[finalName] = (parsedDamboCreditorMap[finalName] ?: 0) + entry.principal
+                    Log.d("HWP_CALC", "협약 외 채무 → 담보: $excludeKey=${matchedRow?.creditor}(${matchedRow?.damboNote}) → $finalName ${entry.principal}만 (PDF원명='${entry.name}')")
+                } else {
+                    targetDebt += entry.principal
+                    parsedCreditorMap[finalName] = (parsedCreditorMap[finalName] ?: 0) + entry.principal
+                    Log.d("HWP_CALC", "협약 외 채무 → 신용(대상채무): $excludeKey=${matchedRow?.creditor ?: "매칭실패"} → $finalName ${entry.principal}만 (PDF원명='${entry.name}')")
+                }
+            }
+        }
 
         // ★ 미협약 판단 (AffiliateList 대조) - 텍스트 파싱 기반
         val loanTypeNames = setOf("신용대출", "신용", "카드", "카드대출", "담보", "담보대출", "대출", "기타", "기타대출", "총액", "국세", "지방세", "세금", "지급보증", "연대보증", "보증", "고소", "소송", "벌금", "물품대금")
@@ -4089,7 +4256,9 @@ class MainActivity : AppCompatActivity() {
 
         // 최저생계비 (2026년)
         val livingCostTable = intArrayOf(0, 154, 252, 322, 390, 453, 513)
-        val householdForHoeseng = minOf(1 + minorChildren, 6)
+        // 단기(회생): 배우자 모르게이면 미성년 자녀 절반만 인정 (1.5명 → 1명, floor)
+        val effectiveMinorForHoeseng = if (spouseSecret) minorChildren / 2 else minorChildren
+        val householdForHoeseng = minOf(1 + effectiveMinorForHoeseng, 6)
         val livingCostHoeseng = livingCostTable[householdForHoeseng]
         val householdForShinbok = minOf(1 + minorChildren + collegeChildren, 6)
         val livingCostShinbok = livingCostTable[householdForShinbok]
@@ -4114,7 +4283,8 @@ class MainActivity : AppCompatActivity() {
         val shortTermDebt = targetDebt + taxDebt
         if (taxDebt > 0) Log.d("HWP_CALC", "단기 대상채무: $targetDebt + 세금$taxDebt = ${shortTermDebt}만")
 
-        val shortTermProperty = originalNetProperty + spouseCarSiseTotal  // 단기 재산: 배우자 차량 포함
+        // 단기 재산: 배우자 차량 + 분양권 순가치 포함 (장기는 분양권 미포함 - 진단 멘트로만 처리)
+        val shortTermProperty = originalNetProperty + spouseCarSiseTotal + (if (hasBunyangGwon) bunyangGwonNet else 0)
         val dischargeEndsSameYear = dischargeWithin5Years && dischargeYear > 0 && (dischargeYear + 5 == currentYear)
         if (dischargeWithin5Years && !dischargeEndsSameYear) { shortTermBlocked = true; shortTermBlockReason = if (isBankruptcyDischarge) "파산 면책 5년 이내" else "면책 5년 이내" }
         if (shortTermProperty > shortTermDebt && shortTermDebt > 0) { shortTermBlocked = true; if (shortTermBlockReason.isNotEmpty()) shortTermBlockReason += ", "; shortTermBlockReason += "재산초과" }
@@ -5071,7 +5241,7 @@ class MainActivity : AppCompatActivity() {
                         else -> if (dischargeEndSoon) (if (longBetter) "신유워" else "신유회") else "신회워"
                     }
                     val canDansun = !isSaeDiagnosis && isDanSunYuri
-                    val immediatePrefix = if (!isSaeDiagnosis && !longTermFullyBlocked && finalYear > 0 && !dischargeWithin5Years && !hasHfcMortgage) "회워 바로 가능, " else ""
+                    val immediatePrefix = if (!isSaeDiagnosis && !longTermFullyBlocked && finalYear > 0 && !dischargeWithin5Years && !hasHfcMortgage && !isSameYearMonthAsToday(thresholdCal)) "회워 바로 가능, " else ""
                     val immediateNote = if (canDansun && !isIncomeEstimated && !dischargeWithin5Years) ", 단순 바로 가능" else ""
                     val cdNote = if (canAfterCarDisposal) ", 차량 처분 후 바로 가능" else ""
                     fun stripLabel(s: String) = s.replace(",", "").replace("바로 가능", "").replace("구직 이후 가능", "").trim()
@@ -5125,6 +5295,12 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         diagnosis += ", $longDiag $pd 이후 가능"
                     }
+                }
+            }
+            // 6개월 30% 이상 + 회생 불가(useYu) → "X월 이후 신유워 가능" 형태로 표기
+            else if (recentDebtRatio >= 30 && recentDebtEntries.isNotEmpty() && targetDebt > 0 && useYu) {
+                findThresholdDate(recentDebtEntries, recentDebtMan, totalDebtForRatio)?.let { pd ->
+                    diagnosis = "$diagnosis $pd 이후 가능"
                 }
             }
         }
@@ -5235,6 +5411,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         val longTermText = StringBuilder()
+        // 진단 라벨이 "회"로 끝나면 (예: 프유회, 신유회, 워유회) 장기 표기를 단기 기준으로 (단기monthly / 단기개월/12+1년)
+        val labelEndsWithHoe = longTermDiagLabel.endsWith("회")
+        val overrideMonthly = if (labelEndsWithHoe && shortTermMonthly > 0) shortTermMonthly else 0
+        val overrideYear = if (labelEndsWithHoe && shortTermMonths > 0) shortTermMonths / 12 + 1 else 0
         // 장기 불가 사유 수집
         val longTermBlockReasons = mutableListOf<String>()
         if (longTermDebtOverLimit) {
@@ -5260,9 +5440,10 @@ class MainActivity : AppCompatActivity() {
         } else if (hasSeizure) {
             if (finalYear > 0 && finalMonthly > 0) {
                 val studentLoanLongSuffix = if (studentLoanApplied) " (학자금 제외)" else ""
-                val periodStr = if (longTermUseMonths) "${longTermDisplayMonths}개월납" else "${finalYear}년납"
+                val displayMonthly = if (overrideMonthly > 0) overrideMonthly else finalMonthly
+                val periodStr = if (overrideYear > 0) "${overrideYear}년납" else if (longTermUseMonths) "${longTermDisplayMonths}개월납" else "${finalYear}년납"
                 val diagSuffix = if (longTermDiagLabel.isNotEmpty()) " / $longTermDiagLabel" else ""
-                longTermText.append("[장기] ${finalMonthly}만 / $periodStr$studentLoanLongSuffix$diagSuffix")
+                longTermText.append("[장기] ${displayMonthly}만 / $periodStr$studentLoanLongSuffix$diagSuffix")
             } else {
                 longTermText.append("[장기] 장기 불가 (압류 진행중)")
             }
@@ -5274,14 +5455,16 @@ class MainActivity : AppCompatActivity() {
             longTermText.append("[장기] 장기 불가 ($blockedReason)")
         } else if (finalYear > 0 && finalMonthly > 0) {
             val studentLoanLongSuffix = if (studentLoanApplied) " (학자금 제외)" else ""
-            val periodStr = if (longTermUseMonths) "${longTermDisplayMonths}개월납" else "${finalYear}년납"
+            val displayMonthly = if (overrideMonthly > 0) overrideMonthly else finalMonthly
+            val periodStr = if (overrideYear > 0) "${overrideYear}년납" else if (longTermUseMonths) "${longTermDisplayMonths}개월납" else "${finalYear}년납"
             val diagSuffix = if (longTermDiagLabel.isNotEmpty()) " / $longTermDiagLabel" else ""
-            longTermText.append("[장기] ${finalMonthly}만 / $periodStr$studentLoanLongSuffix$diagSuffix")
+            longTermText.append("[장기] ${displayMonthly}만 / $periodStr$studentLoanLongSuffix$diagSuffix")
         } else {
             val studentLoanLongSuffix = if (studentLoanApplied) " (학자금 제외)" else ""
-            val periodStr = if (longTermUseMonths) "${longTermDisplayMonths}개월납" else "${longTermYears}년납"
+            val displayMonthly = if (overrideMonthly > 0) overrideMonthly else roundedLongTermMonthly
+            val periodStr = if (overrideYear > 0) "${overrideYear}년납" else if (longTermUseMonths) "${longTermDisplayMonths}개월납" else "${longTermYears}년납"
             val diagSuffix = if (longTermDiagLabel.isNotEmpty()) " / $longTermDiagLabel" else ""
-            longTermText.append("[장기] ${roundedLongTermMonthly}만 / $periodStr$studentLoanLongSuffix$diagSuffix")
+            longTermText.append("[장기] ${displayMonthly}만 / $periodStr$studentLoanLongSuffix$diagSuffix")
         }
         if (canApplySae && saeTotalPayment > 0) {
             val saeBugyeol = netProperty - targetDebt >= 10000 || longTermPropertyExcess || propertyExcessWithGuarantee
@@ -5453,27 +5636,19 @@ class MainActivity : AppCompatActivity() {
                 longTermText.append(newLt)
                 binding.test2.text = longTermText.toString()
             }
-            if (hasBunyangGwon) finalDiagnosis = "$finalDiagnosis, 분양권 포기해야 진행 가능"
             if (!isClientMode && originalTargetDebt <= 4000 && originalTargetDebt > 0) finalDiagnosis = "$finalDiagnosis, 수임료 오픈"
             val hasSuimOpen = originalTargetDebt in 1..4000
             if (majorCreditorRatio >= 70 && !(isSaeDiagnosis && !hasSuimOpen)) finalDiagnosis = "$finalDiagnosis, 수임 별도"
         }
         // 회워 진단 시 납부회수 표기 (2/3/4개월 이내 채무 기반)
+        // 단, 6개월 비율이 30% 미만이면 회생 바로 가능 상태이므로 납부 후 표기 불필요
         var adjustedLtLabel = longTermDiagLabel
-        if (diagnosis.contains("회워")) {
-            val paymentCount = when {
-                fourMonthDebt >= 5000 -> 6
-                threeMonthDebt >= 5000 -> 6
-                threeMonthDebt >= 4000 -> 5
-                twoMonthDebt >= 5000 -> 6
-                twoMonthDebt >= 4000 -> 5
-                twoMonthDebt >= 1000 -> 4
-                else -> 0  // 바로 회워 가능
-            }
-            val paymentNote = if (paymentCount > 0) {
-                val targetMonth = (Calendar.getInstance().get(Calendar.MONTH) + paymentCount - 1) % 12 + 1
-                "${targetMonth}월까지 납부 후 회워"
-            } else ""
+        if (diagnosis.contains("회워") && recentDebtRatio >= 30) {
+            // 각 조건마다: 해당 bucket에 속한 채무 중 가장 오래된 채무의 채권발생일 + result개월
+            // → 그 중 가장 뒷 날짜를 X월까지 납부 후 회워로 표기 (헬퍼 함수)
+            val (_, paymentCount, paymentNote) = calcPaymentDeadline(
+                recentDebtEntries, twoMonthDebt, threeMonthDebt, fourMonthDebt
+            )
             if (paymentNote.isNotEmpty()) {
                 // "회워 바로 가능" 위치에 납부회수 텍스트를 대체
                 if (finalDiagnosis.contains("회워 바로 가능")) {
@@ -5816,6 +5991,17 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // ★ 최종 보정: 월변제금 < minMonthly → 년수를 줄여서 월변제금 minMonthly 보장
+        // (총변제금이 대상채무보다 높을 때 월변제금을 줄이지 말고 년수를 줄이라는 정책)
+        if (finalMonthly in 1 until minMonthly && totalPayment > 0) {
+            val newYears = ((totalPayment + minMonthly * 12 - 1) / (minMonthly * 12)).coerceIn(1, maxYears)
+            Log.d("HWP_CALC", "장기 최종 보정: 월변제금 ${finalMonthly}만 < ${minMonthly}만 → ${minMonthly}만/${newYears}년 (이전 ${finalYear}년)")
+            finalYear = newYears
+            finalMonthly = minMonthly
+            useMonths = false
+            displayMonths = 0
+        }
+
         return LongTermCalcResult(
             conservativeMonthly, conservativeYears,
             aggressiveMonthly, aggressiveYears,
@@ -5937,6 +6123,77 @@ class MainActivity : AppCompatActivity() {
         Log.d("HWP_CALC", "거래처 장기: ${clientFinalMonthly}만/${clientFinalYear}년, 새새: ${clientSaeMonthly}만/${clientSaeYears}년")
     }
 
+    // ============= 대출과목 표 채권사명 매칭 헬퍼 =============
+    private fun extractLoanCatCreditorNames(line: String, target: MutableSet<String>) {
+        val nameP = Pattern.compile("([가-힣]{2,12}(?:저축은행|은행|카드|캐피탈|대부|증권|공단|보험|신협|농협|수협|보증재단|파이낸스|투자증권|상호저축은행|할부금융))")
+        val nameM = nameP.matcher(line)
+        while (nameM.find()) {
+            target.add(nameM.group(1)!!)
+        }
+    }
+
+    private fun matchesLoanCatDambo(rawName: String, names: Set<String>): Boolean {
+        if (rawName.length < 2 || names.isEmpty()) return false
+        val cleaned = rawName.replace(Regex("\\[.*?\\]"), "")
+        return names.any { cleaned.contains(it) || it.contains(cleaned) }
+    }
+
+    private fun isSameYearMonthAsToday(cal: Calendar): Boolean {
+        val now = Calendar.getInstance()
+        return cal.get(Calendar.YEAR) == now.get(Calendar.YEAR) && cal.get(Calendar.MONTH) == now.get(Calendar.MONTH)
+    }
+
+    private fun extractSeqNumbers(line: String, target: MutableSet<Int>) {
+        val ciM = Pattern.compile("(\\d{1,2}(?:,\\d{1,2})+)").matcher(line)
+        while (ciM.find()) {
+            for (part in ciM.group(1)!!.split(",")) {
+                val n = part.toIntOrNull() ?: continue
+                if (n in 1..30) target.add(n)
+            }
+        }
+        val csM = Pattern.compile("^(\\d{1,2})(?![억만원천년,])").matcher(line)
+        if (csM.find()) {
+            val n = csM.group(1)!!.toInt()
+            if (n in 1..30) target.add(n)
+        }
+    }
+
+    // ============= 납부회수 계산 (parseHwpData 사이즈 축소용 추출) =============
+    private fun calcPaymentDeadline(
+        recentDebtEntries: List<Pair<Calendar, Int>>,
+        twoMonthDebt: Int, threeMonthDebt: Int, fourMonthDebt: Int
+    ): Triple<Calendar?, Int, String> {
+        val candidates = mutableListOf<Pair<Calendar, String>>()
+        val rules = listOf(
+            Triple(fourMonthDebt >= 5000, 4, 6) to "4개월≥5000→6",
+            Triple(threeMonthDebt >= 5000, 3, 6) to "3개월≥5000→6",
+            Triple(threeMonthDebt >= 4000, 3, 5) to "3개월≥4000→5",
+            Triple(twoMonthDebt >= 5000, 2, 6) to "2개월≥5000→6",
+            Triple(twoMonthDebt >= 4000, 2, 5) to "2개월≥4000→5",
+            Triple(twoMonthDebt >= 1000, 2, 4) to "2개월≥1000→4"
+        )
+        for ((cond, name) in rules) {
+            if (!cond.first) continue
+            val bucketMonths = cond.second
+            val resultMonths = cond.third
+            val boundary = Calendar.getInstance().apply { add(Calendar.MONTH, -bucketMonths) }
+            val oldest = recentDebtEntries.filter { it.first.after(boundary) }
+                .minByOrNull { it.first.timeInMillis }?.first ?: continue
+            val cal = Calendar.getInstance().apply {
+                timeInMillis = oldest.timeInMillis
+                add(Calendar.MONTH, resultMonths)
+            }
+            candidates.add(cal to "$name(채권${oldest.get(Calendar.YEAR)}.${oldest.get(Calendar.MONTH) + 1}.${oldest.get(Calendar.DAY_OF_MONTH)}+${resultMonths}개월)")
+        }
+        val latest = candidates.maxByOrNull { it.first.timeInMillis }
+        if (latest == null) return Triple(null, 0, "")
+        val today = Calendar.getInstance()
+        val monthsDiff = (latest.first.get(Calendar.YEAR) - today.get(Calendar.YEAR)) * 12 +
+                         (latest.first.get(Calendar.MONTH) - today.get(Calendar.MONTH))
+        Log.d("HWP_CALC", "납부회수 후보: ${candidates.joinToString { "${it.second}→${it.first.get(Calendar.MONTH) + 1}월" }} → 최종 ${latest.first.get(Calendar.MONTH) + 1}월")
+        return Triple(latest.first, monthsDiff + 1, "${latest.first.get(Calendar.MONTH) + 1}월까지 납부 후 회워")
+    }
+
     // ============= 유틸리티 =============
     private fun extractAmountAfterKeyword(text: String, keyword: String): Int {
         if (!text.contains(keyword)) return 0
@@ -5989,6 +6246,8 @@ class MainActivity : AppCompatActivity() {
 
     private val debtResultKeywords = listOf("면책","면채","실효","폐지","기각","취하","완납","안되","안됬","거절","반려")
     private fun hasDebtResult(text: String) = debtResultKeywords.any { text.contains(it) }
+    private val damboKeywordList = listOf("할부금융","리스","후순위","중고차할부","신차할부","차할부","차량할부","자동차할부","(500)","(510)","시설자금","(1071)","중도금","예적금","보증금대출","유가증권")
+    private fun hasDamboKeyword(text: String) = damboKeywordList.any { text.contains(it) }
 
     private fun isCarLoanKeyword(t: String) = t.contains("신차할부") || t.contains("중고차할부") || t.contains("(500)") || t.contains("(510)") || t.contains("자동차담보") || t.contains("차량담보")
 
@@ -6274,6 +6533,7 @@ class MainActivity : AppCompatActivity() {
         aiDefermentMonths = 0
         aiHasRecoveryPlan = false
         pdfExcludedGuaranteeDebt = 0; pdfExcludedOtherDebt = 0; pdfExcludedDamboCreditors.clear(); pdfExcludedEntries.clear()
+        pdfOutsideEntries.clear()
         pdfRecoveryDebt = 0; pdfRecoveryIncome = 0; pdfRecoveryMonths = 0
 
         // 파일 텍스트 초기화
