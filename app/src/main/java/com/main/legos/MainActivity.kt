@@ -1650,9 +1650,14 @@ class MainActivity : AppCompatActivity() {
         var delinquentDays = 0
         var actualDelinquentDays = 0  // 실제 연체일수 (다른 단계 진행으로 인한 1095일 제외)
         var hasDischarge = false
-        var isBankruptcyDischarge = false  // 파산 면책 여부
-        var dischargeYear = 0
+        var isBankruptcyDischarge = false  // 파산 면책 여부 (두 면책 중 위험한 쪽이 파산인지)
+        var dischargeYear = 0  // 대표 면책 년도 (표시/로직용, 아래 둘 중 위험한 쪽)
         var dischargeMonth = 0
+        // 파산 면책과 회생(기타) 면책을 독립 추적 (5년 이내 판단 각각)
+        var bankruptcyDischargeYear = 0
+        var bankruptcyDischargeMonth = 0
+        var recoveryDischargeYear = 0
+        var recoveryDischargeMonth = 0
         var hasShinbokwiHistory = false
         var isBusinessOwner = false
         var isFreelancer = false
@@ -1854,7 +1859,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             // 패턴기반: "N + 채권사명 + 차량담보/차담보 등" (테이블 합쳐진 경우 대응, 영문/전각 대응)
-            val damboM = Pattern.compile("(\\d{1,2})(?!년)([^\\d]{2,}?)(?:차량담보|차량할부|차량리스|자동차담보|차담보|집담보|중도금대출|중도금)").matcher(l)
+            val damboM = Pattern.compile("(\\d{1,2})(?!년)([^\\d]{2,}?)(?:차량담보|차량할부|차량리스|자동차담보|차담보|집담보|기계담보|중도금대출|중도금)").matcher(l)
             while (damboM.find()) {
                 val seqNum = damboM.group(1)!!.toInt()
                 if (seqNum in 1..30) {
@@ -2063,7 +2068,7 @@ class MainActivity : AppCompatActivity() {
                                     ?: extractAmountAfterKeyword(g, "배우자명의대출")
                                 ownLoan + spouseLoan
                             } else {
-                                extractAmountAfterKeyword(g, "대출")
+                                extractAllAmountsAfterKeyword(g, "대출")
                             }
                             val deductBojung = if (rawSise != null && rawSise > 0) bojungAmt else 0
                             val isJilgwonXProperty = jeonseNoJilgwon && loanAmt > 0
@@ -2117,15 +2122,14 @@ class MainActivity : AppCompatActivity() {
                             ?: extractAmountAfterKeyword(line, "배우자명의대출")
                         ownLoan + spouseLoan
                     } else {
-                        extractAmountAfterKeyword(line, "대출")
+                        extractAllAmountsAfterKeyword(line, "대출")
                     }
                     val deductBojung = if (rawSise != null && rawSise > 0) bojungAmt else 0
                     val net = maxOf(siseAmt - loanAmt - deductBojung, 0)
                     when (lineOwnership) {
                         "공동" -> {
-                            // 비율 파싱: "본인 50" 등, 비율 있으면 (시세-대출)×비율, 없으면 (시세-대출)/2
-                            val ratioMatch = Regex("본인\\s*(\\d+)").find(region)
-                            val ownerRatio = ratioMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                            // 비율 파싱: "본인 50", "본인4:어머니4:누나2" 등
+                            val ownerRatio = parseOwnerRatioPct(region) ?: 0
                             val portion = if (ownerRatio > 0) {
                                 Math.round(net.toDouble() * ownerRatio / 100).toInt()
                             } else {
@@ -2172,8 +2176,7 @@ class MainActivity : AppCompatActivity() {
                 // 공동명의 감지 (재산 필드 내) + 본인 지분율 파싱
                 if (lineNoSpace.contains("공동명의")) {
                     propertyOwnership = "공동"
-                    val ratioMatch = Regex("본인\\s*(\\d+)").find(propertyVal)
-                    propertyOwnerRatio = ratioMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                    propertyOwnerRatio = parseOwnerRatioPct(propertyVal) ?: 0
                 }
                 val propertyNoSpace = propertyVal.replace(Regex("\\s"), "")
                 if (propertyNoSpace.isNotEmpty() && !propertyNoSpace.matches(Regex("[xX×없0].*"))) {
@@ -2223,7 +2226,7 @@ class MainActivity : AppCompatActivity() {
                             maxOf(explicitJibunAmt - loanAmt - seipjaAmt, 0)
                         } else if (propertyOwnership == "공동" || isGroupJoint) {
                             // 공동명의: (시세-대출)×비율, 비율 없으면 (시세-대출)/2
-                            val groupRatio = if (isGroupJoint) Regex("본인\\s*(\\d+)").find(g)?.groupValues?.get(1)?.toIntOrNull() ?: 0 else propertyOwnerRatio
+                            val groupRatio = if (isGroupJoint) parseOwnerRatioPct(g) ?: 0 else propertyOwnerRatio
                             val net = maxOf(siseAmt - loanAmt - seipjaAmt - deductBojung, 0)
                             if (groupRatio > 0) {
                                 Math.round(net.toDouble() * groupRatio / 100).toInt()
@@ -2494,8 +2497,10 @@ class MainActivity : AppCompatActivity() {
                             Log.d("HWP_PARSE", "월세수익 감지: ${rentalIncomeMan}만 (단기 소득에만 포함)")
                         }
                         // "/" 또는 "," 또는 ">" 뒤 월 소득 (예: "/ 월 소득 330만", "연봉 5200만 > 월소득 350만")
-                        // 월세수익 부분은 제거 후 파싱
-                        val lineForSlash = line.replace(Regex("/?\\s*월세수익\\s*\\d+\\s*만"), "")
+                        // 월세수익/연금 부분은 제거 후 파싱 (연금은 별도로 합산됨)
+                        val lineForSlash = line
+                            .replace(Regex("/?\\s*월세수익\\s*\\d+\\s*만"), "")
+                            .replace(Regex("[+,/]?\\s*(?:국민연금|기초연금|장애연금|노령연금|공무원연금|군인연금|유족연금|개인연금|실업급여)\\s*\\d+\\s*만"), "")
                         val afterSlash = if (lineForSlash.contains(">")) lineForSlash.substringAfter(">")
                             else if (lineForSlash.contains("/")) lineForSlash.substringAfter("/")
                             else if (lineForSlash.contains(",")) lineForSlash.substringAfter(",")
@@ -2566,8 +2571,11 @@ class MainActivity : AppCompatActivity() {
                 if (extraIncomeMatch != null) {
                     val extra = extraIncomeMatch.groupValues[1].toInt()
                     if (extra in 1..9999) {
-                        parsedMonthlyIncome += extra
-                        Log.d("HWP_PARSE", "연봉 연속줄 소득 추가: ${extra}만 → 합계=${parsedMonthlyIncome}만 ($line)")
+                        // 전년도/연간 금액은 연봉이므로 12로 나눠서 월소득으로 환산
+                        val isAnnual = lineNoSpace.contains("전년도") || lineNoSpace.contains("연간")
+                        val addAmount = if (isAnnual) extra / 12 else extra
+                        parsedMonthlyIncome += addAmount
+                        Log.d("HWP_PARSE", "연봉 연속줄 소득 추가: ${addAmount}만${if (isAnnual) " (연${extra}만÷12)" else ""} → 합계=${parsedMonthlyIncome}만 ($line)")
                     }
                 }
             }
@@ -2834,7 +2842,6 @@ class MainActivity : AppCompatActivity() {
             // 면책 감지 (줄 위치 무관, "면채" 오타도 포함)
             if (lineNoSpace.contains("면책") || lineNoSpace.contains("면채")) {
                 hasDischarge = true
-                if (lineNoSpace.contains("파산")) isBankruptcyDischarge = true
                 // 면책이 포함된 구간에서만 년도 추출 (폐지 년도와 혼동 방지)
                 val dischargeSegment = line.split(",", "，", "/", "／").find { it.contains("면책") || it.contains("면채") } ?: line
                 var parsedYear = 0; var parsedMonth = 0
@@ -2857,11 +2864,16 @@ class MainActivity : AppCompatActivity() {
                         if (m.group(2) != null) parsedMonth = m.group(2)!!.toInt()
                     }
                 }
-                // 가장 최근 면책 년도 유지 (복수 면책 시 오래된 것으로 덮어쓰기 방지)
-                if (parsedYear > dischargeYear || (parsedYear == dischargeYear && parsedMonth > dischargeMonth)) {
-                    dischargeYear = parsedYear; dischargeMonth = parsedMonth
-                } else if (dischargeYear == 0) {
-                    dischargeYear = parsedYear; dischargeMonth = parsedMonth
+                // 파산 면책과 회생 면책을 독립 추적 (각각 5년 이내 판단)
+                val isThisBankruptcy = dischargeSegment.contains("파산")
+                if (isThisBankruptcy) {
+                    if (parsedYear > bankruptcyDischargeYear || (parsedYear == bankruptcyDischargeYear && parsedMonth > bankruptcyDischargeMonth) || bankruptcyDischargeYear == 0) {
+                        bankruptcyDischargeYear = parsedYear; bankruptcyDischargeMonth = parsedMonth
+                    }
+                } else {
+                    if (parsedYear > recoveryDischargeYear || (parsedYear == recoveryDischargeYear && parsedMonth > recoveryDischargeMonth) || recoveryDischargeYear == 0) {
+                        recoveryDischargeYear = parsedYear; recoveryDischargeMonth = parsedMonth
+                    }
                 }
             }
 
@@ -3049,13 +3061,18 @@ class MainActivity : AppCompatActivity() {
                         // 면책 감지
                         if (seg.contains("면책") || seg.contains("면채")) {
                             hasDischarge = true
-                            if (seg.contains("파산")) isBankruptcyDischarge = true
                             var segYear = 0
                             var m = Pattern.compile("(\\d{2})년").matcher(seg)
                             if (m.find()) segYear = 2000 + m.group(1)!!.toInt()
                             else { m = Pattern.compile("(20\\d{2})").matcher(seg); if (m.find()) segYear = m.group(1)!!.toInt() }
-                            if (segYear > dischargeYear) dischargeYear = segYear
-                            Log.d("HWP_PARSE", "면책 감지 (세그먼트): $seg, 파산=$isBankruptcyDischarge, 년도=$dischargeYear")
+                            // 파산 면책과 회생 면책을 독립 추적
+                            val isThisBankruptcy = seg.contains("파산")
+                            if (isThisBankruptcy) {
+                                if (segYear > bankruptcyDischargeYear || bankruptcyDischargeYear == 0) bankruptcyDischargeYear = segYear
+                            } else {
+                                if (segYear > recoveryDischargeYear || recoveryDischargeYear == 0) recoveryDischargeYear = segYear
+                            }
+                            Log.d("HWP_PARSE", "면책 감지 (세그먼트): $seg, 파산=$isThisBankruptcy, 년도=$segYear (파산면책=$bankruptcyDischargeYear, 회생면책=$recoveryDischargeYear)")
                         }
                         // 실효 감지 → 장기연체자 (1095일)
                         if (seg.contains("실효")) {
@@ -3073,14 +3090,7 @@ class MainActivity : AppCompatActivity() {
                             }
                             Log.d("HWP_PARSE", "폐지/기각/취하 감지 (세그먼트) → 장기연체자: $seg, 회생폐지=$isDismissed")
                         }
-                        // 일수 기입 → 연체기간 설정
-                        val daysMatcher = Pattern.compile("(\\d+)일").matcher(seg)
-                        if (daysMatcher.find()) {
-                            val days = daysMatcher.group(1)!!.toInt()
-                            delinquentDays = maxOf(delinquentDays, days)
-                            actualDelinquentDays = maxOf(actualDelinquentDays, days)
-                            Log.d("HWP_PARSE", "채무조정 연체일수 감지 (세그먼트): ${days}일")
-                        }
+                        // 연체일수는 "연체일수" 필드에서만 체크 (채무조정에서는 파싱 안 함)
                         // 진행중 감지: 전체 내용에 결과가 없고, 해당 세그먼트에도 결과가 없을 때만
                         val segHasResult = hasDebtResult(seg)
                         if (!segHasResult && !contentHasAnyResult) {
@@ -3213,8 +3223,7 @@ class MainActivity : AppCompatActivity() {
                 // 공동명의 본인 지분율 계산 (비율 명시 없으면 ÷2)
                 var carJointRatio = 0  // 0=비공동, 1~100=본인 적용 비율(%)
                 if (isJointCar) {
-                    val ratioMatch = Regex("본인\\s*(\\d+)").find(lineNoSpace)
-                    val ownerRatio = ratioMatch?.groupValues?.get(1)?.toIntOrNull() ?: 50
+                    val ownerRatio = parseOwnerRatioPct(lineNoSpace) ?: 50
                     carJointRatio = ownerRatio
                 }
                 val isSpouseCar = (lineNoSpace.contains("배우자명의") || lineNoSpace.contains("배우자")) && !isJointCar
@@ -4196,10 +4205,10 @@ class MainActivity : AppCompatActivity() {
         if (hasPersonalRecovery && !isRecoveryOngoing && !hasDischarge && !isDismissed) {
             hasDischarge = true
             if (personalRecoveryYear > 0) {
-                dischargeYear = personalRecoveryYear
-                dischargeMonth = personalRecoveryMonth
+                recoveryDischargeYear = personalRecoveryYear
+                recoveryDischargeMonth = personalRecoveryMonth
             }
-            Log.d("HWP_CALC", "개인회생 → 면책 처리 (회생 진행중 아님): ${dischargeYear}년 ${dischargeMonth}월")
+            Log.d("HWP_CALC", "개인회생 → 면책 처리 (회생 진행중 아님): ${recoveryDischargeYear}년 ${recoveryDischargeMonth}월")
         }
         // 폐지 후 면책을 받았으면 폐지는 무효 (이후 회생이 성공한 것)
         if (isDismissed && hasDischarge) {
@@ -4269,12 +4278,35 @@ class MainActivity : AppCompatActivity() {
         val currentYear = java.time.LocalDate.now().year
         val currentMonth = java.time.LocalDate.now().monthValue
 
-        // 면책 5년 이내 판단 (년월 비교) - 파산 면책도 동일 적용
-        val dischargeWithin5Years = hasDischarge && dischargeYear > 0 && (
-                (currentYear - dischargeYear) < 5 ||
-                        ((currentYear - dischargeYear) == 5 && dischargeMonth > 0 && currentMonth < dischargeMonth) ||
-                        ((currentYear - dischargeYear) == 5 && dischargeMonth == 0)
+        // 파산 면책과 회생 면책 각각 독립 판단 (둘 다 5년 기준)
+        fun within5(y: Int, mo: Int): Boolean = y > 0 && (
+                (currentYear - y) < 5 ||
+                        ((currentYear - y) == 5 && mo > 0 && currentMonth < mo) ||
+                        ((currentYear - y) == 5 && mo == 0)
                 )
+        val bankruptcyDischargeWithin5 = within5(bankruptcyDischargeYear, bankruptcyDischargeMonth)
+        val recoveryDischargeWithin5 = within5(recoveryDischargeYear, recoveryDischargeMonth)
+        val dischargeWithin5Years = bankruptcyDischargeWithin5 || recoveryDischargeWithin5
+        // 표시/로직용 대표값: 5년 이내인 것 우선, 둘 다면 최신, 없으면 최신
+        if (bankruptcyDischargeWithin5 && !recoveryDischargeWithin5) {
+            dischargeYear = bankruptcyDischargeYear; dischargeMonth = bankruptcyDischargeMonth; isBankruptcyDischarge = true
+        } else if (recoveryDischargeWithin5 && !bankruptcyDischargeWithin5) {
+            dischargeYear = recoveryDischargeYear; dischargeMonth = recoveryDischargeMonth; isBankruptcyDischarge = false
+        } else if (bankruptcyDischargeWithin5 && recoveryDischargeWithin5) {
+            if (bankruptcyDischargeYear >= recoveryDischargeYear) {
+                dischargeYear = bankruptcyDischargeYear; dischargeMonth = bankruptcyDischargeMonth; isBankruptcyDischarge = true
+            } else {
+                dischargeYear = recoveryDischargeYear; dischargeMonth = recoveryDischargeMonth; isBankruptcyDischarge = false
+            }
+        } else {
+            // 둘 다 5년 초과 또는 없음: 최신 값으로 (표시용)
+            if (bankruptcyDischargeYear >= recoveryDischargeYear) {
+                dischargeYear = bankruptcyDischargeYear; dischargeMonth = bankruptcyDischargeMonth; isBankruptcyDischarge = bankruptcyDischargeYear > 0
+            } else {
+                dischargeYear = recoveryDischargeYear; dischargeMonth = recoveryDischargeMonth; isBankruptcyDischarge = false
+            }
+        }
+        Log.d("HWP_CALC", "면책 5년 판단: 파산${bankruptcyDischargeYear}년=${bankruptcyDischargeWithin5}, 회생${recoveryDischargeYear}년=${recoveryDischargeWithin5}, 대표=${dischargeYear}년(파산=$isBankruptcyDischarge)")
 
         // ★ 세금: 텍스트 파싱 (AI 미사용)
         taxDebt = textTaxDebt
@@ -5585,12 +5617,14 @@ class MainActivity : AppCompatActivity() {
             diagnosis = diagnosis.replace("새새", "새")
         }
 
-        // 중간 회→유 변환: 한국주택금융공사 집담보, 동일 채권사가 담보+신용 보유, 또는 대상채무 4000만 이하
+        // 중간 회→유 변환: 사업자, 단순재산초과, 한국주택금융공사 집담보, 동일 채권사가 담보+신용 보유, 또는 대상채무 4000만 이하
         val hasSameCreditorDamboAndCredit = parsedDamboCreditorNames.any { it in parsedCreditorMap }
-        if (hasSameCreditorDamboAndCredit || hasHfcMortgage || targetDebt <= 4000) {
+        if (canDeferment && (isBusinessOwner || shortTermPropertyExcess || hasSameCreditorDamboAndCredit || hasHfcMortgage || targetDebt <= 4000)) {
             if (diagnosis.contains("신회워") || diagnosis.contains("프회워")) {
                 diagnosis = diagnosis.replace("신회워", "신유워").replace("프회워", "프유워")
                 val reason = when {
+                    shortTermPropertyExcess -> "단순재산초과"
+                    isBusinessOwner -> "사업자"
                     hasHfcMortgage -> "한국주택금융공사"
                     targetDebt <= 4000 -> "소액(${targetDebt}만)"
                     else -> "담보+신용 동일채권사"
@@ -6203,6 +6237,32 @@ class MainActivity : AppCompatActivity() {
         return extractAmount(segment)
     }
 
+    // "/" 구분된 모든 세그먼트에서 키워드 뒤 금액을 합산 (예: 담보대출 2억9500만 / 담보대출 2억3800만 → 53300)
+    private fun extractAllAmountsAfterKeyword(text: String, keyword: String): Int {
+        if (!text.contains(keyword)) return 0
+        var total = 0
+        for (seg in text.split("/")) {
+            if (seg.contains(keyword)) {
+                total += extractAmount(seg.substring(seg.indexOf(keyword)))
+            }
+        }
+        return total
+    }
+
+    // 공동명의 본인 지분율(%) 파싱. "본인4:어머니4:누나2" → 40%, "본인 50" → 50%
+    // 본인 숫자 뒤에 콜론이 오면 비율 표기로 보고 분모 합산하여 %로 변환
+    private fun parseOwnerRatioPct(text: String): Int? {
+        val ownMatch = Regex("본인\\s*(\\d+)").find(text) ?: return null
+        val ownNum = ownMatch.groupValues[1].toIntOrNull() ?: return null
+        val tail = text.substring(ownMatch.range.last + 1).trimStart()
+        if (tail.startsWith(":") || tail.startsWith("：")) {
+            val sum = Regex("[가-힣]+\\s*(\\d+)").findAll(text)
+                .mapNotNull { it.groupValues[1].toIntOrNull() }.sum()
+            if (sum > 0) return Math.round(ownNum.toDouble() * 100 / sum).toInt()
+        }
+        return ownNum
+    }
+
     private fun formatToEok(amountInMan: Int): String {
         return if (amountInMan >= 10000) {
             val eok = amountInMan / 10000
@@ -6246,7 +6306,7 @@ class MainActivity : AppCompatActivity() {
 
     private val debtResultKeywords = listOf("면책","면채","실효","폐지","기각","취하","완납","안되","안됬","거절","반려")
     private fun hasDebtResult(text: String) = debtResultKeywords.any { text.contains(it) }
-    private val damboKeywordList = listOf("할부금융","리스","후순위","중고차할부","신차할부","차할부","차량할부","자동차할부","(500)","(510)","시설자금","(1071)","중도금","예적금","보증금대출","유가증권")
+    private val damboKeywordList = listOf("할부금융","리스","후순위","중고차할부","신차할부","차할부","차량할부","자동차할부","(500)","(510)","시설자금","(1071)","중도금","예적금","보증금대출","유가증권","기계담보","기계할부")
     private fun hasDamboKeyword(text: String) = damboKeywordList.any { text.contains(it) }
 
     private fun isCarLoanKeyword(t: String) = t.contains("신차할부") || t.contains("중고차할부") || t.contains("(500)") || t.contains("(510)") || t.contains("자동차담보") || t.contains("차량담보")
