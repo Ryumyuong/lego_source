@@ -18,11 +18,15 @@ android {
         applicationId = "com.main.legos"
         minSdk = 26
         targetSdk = 36
-        versionCode = 47
-        versionName = "5.7"
+        versionCode = 49
+        versionName = "5.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "CLAUDE_API_KEY", "\"${localProperties.getProperty("CLAUDE_API_KEY", "")}\"")
+        buildConfigField(
+            "String",
+            "CLAUDE_API_KEY",
+            "\"${localProperties.getProperty("CLAUDE_API_KEY", "")}\""
+        )
     }
 
     buildTypes {

@@ -1731,6 +1731,7 @@ class MainActivity : AppCompatActivity() {
         var hasOthersRealEstate = false  // 타인명의 부동산 (배우자/부모/형제 등)
         var hasOwnRealEstate = false     // 본인/공동명의 부동산
         var ownRealEstateCount = 0       // 본인명의 부동산 개수 (2개=부결고지, 3개+=진행불가)
+        var hasHomeMortgageInSidebar = false  // 대출과목 사이드바에 "집담보" 키워드 → 집경매 위험
         var savingsDeposit = 0  // 예적금 금액 (만원)
         var bizDeposit = 0  // 사업장 보증금 (만원, 재산 합산)
         var hasBunyangGwon = false  // 분양권 보유 여부 (재산 제외)
@@ -1742,6 +1743,7 @@ class MainActivity : AppCompatActivity() {
         var includedSeqNumbers = mutableSetOf<Int>()  // 강제 포함할 순번 (순번N 신용대출)
         val loanCatDamboCreditorNames = mutableSetOf<String>()  // 대출과목에서 담보 키워드와 함께 등장한 채권사명 (순번 매칭 실패 시 이름 매칭용)
         val loanCatCreditCreditorNames = mutableSetOf<String>()  // 대출과목에서 "신용"으로 명시된 채권사명 (담보 분류 무효화용)
+        val thirdPartyDamboMap = mutableMapOf<String, Int>()  // 타인명의 담보대출 (채권사명 → 만원). 본인 명의 아니어도 담보로 분류
         var hasOngoingProcess = false  // 다른 채무조정 진행 중
         var ongoingProcessName = ""   // 진행중인 제도명 (회/신/워)
         var isIncomeEstimated = false  // 소득 예상
@@ -1813,6 +1815,11 @@ class MainActivity : AppCompatActivity() {
         var daebuCreditorCount = 0  // 대부 채권사 수
         val daebuCreditorNames = mutableSetOf<String>()  // 대부 채권사 중복 제거용
         var cardCapitalDebtMan = 0  // 카드/캐피탈 채무 합계 (만원)
+        // 담보 reclassify 시 차감용: 채권사별 분류 합계 추적
+        val guaranteeCreditorMap = mutableMapOf<String, Int>()
+        val jigubojungCreditorMap = mutableMapOf<String, Int>()
+        val daebuCreditorAmountMap = mutableMapOf<String, Int>()
+        val cardCapitalCreditorMap = mutableMapOf<String, Int>()
         var saeExcludedDebtMan = 0  // 새출발 제외 채무 (기업은행 근로복지공단 보증 등) (만원)
         // ★ 과반 비율: 대상채무 확정 후 계산
         var majorCreditorRatio = 0.0
@@ -1888,6 +1895,11 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+            // 대출과목 사이드바에 "집담보" 키워드 → 집경매 위험 표시 (본인명의 부동산 감지 못 해도)
+            if (preScanLoanCat && l.contains("집담보")) {
+                hasHomeMortgageInSidebar = true
+                Log.d("HWP_PRESCAN", "대출과목 집담보 감지 → 집경매 위험: ${rawLine.trim()}")
+            }
             // 패턴기반: "N + 채권사명 + 차량담보/차담보 등" (테이블 합쳐진 경우 대응, 영문/전각 대응)
             val damboM = Pattern.compile("(\\d{1,2})(?!년)([^\\d]{2,}?)(?:차량담보|차량할부|차량리스|자동차담보|차담보|집담보|기계담보|중도금대출|중도금)").matcher(l)
             while (damboM.find()) {
@@ -1929,8 +1941,22 @@ class MainActivity : AppCompatActivity() {
             if (l.contains("담보") || l.contains("할부") || l.contains("리스") || l.contains("중도금")) {
                 Log.d("HWP_PRESCAN", "담보키워드 포함 라인: $l")
             }
+            // 타인명의 담보대출 감지 (어머님/아버님/배우자 등 명의 + 담보)
+            if (l.contains("명의") && l.contains("담보") && !l.contains("본인명의")) {
+                val tpM = Pattern.compile("([가-힣A-Za-z]+(?:은행|저축은행|상호저축|캐피탈|카드|보험|상호금융))(\\d+)억(?:(\\d{1,4})만)?").matcher(l)
+                if (tpM.find()) {
+                    val creditor = tpM.group(1)!!
+                    val eok = tpM.group(2)!!.toIntOrNull() ?: 0
+                    val man = tpM.group(3)?.toIntOrNull() ?: 0
+                    val totalMan = eok * 10000 + man
+                    if (totalMan > 0) {
+                        thirdPartyDamboMap[creditor] = totalMan
+                        Log.d("HWP_PRESCAN", "타인명의 담보 감지: $creditor ${totalMan}만 - ${rawLine.trim()}")
+                    }
+                }
+            }
         }
-        Log.d("HWP_PRESCAN", "사전스캔 결과: excludedSeqNumbers=$excludedSeqNumbers, 학자금취업후상환=$studentLoanExcludedSeqs")
+        Log.d("HWP_PRESCAN", "사전스캔 결과: excludedSeqNumbers=$excludedSeqNumbers, 학자금취업후상환=$studentLoanExcludedSeqs, 타인명의담보=$thirdPartyDamboMap")
 
         // ============= 보조 정보 추출 =============
         // 거대 메서드 바이트코드 한계 회피 위해 loop body를 local function으로 추출 (Kotlin local fun = 별도 JVM method)
@@ -3422,8 +3448,8 @@ class MainActivity : AppCompatActivity() {
                     val is290DamboByCategory = is290 && rowSeqNum > 0 && excludedSeqNumbers.contains(rowSeqNum)
                     // 대출과목에서 담보/할부로 확인된 순번 → 담보 처리
                     val isDamboByPreScan = rowSeqNum > 0 && excludedSeqNumbers.contains(rowSeqNum)
-                    // 대출과목 표 채권사명 매칭 (순번이 없는 표 형식 대응)
-                    val isDamboByLoanCatName = matchesLoanCatDambo(rawCreditorName, loanCatDamboCreditorNames)
+                    // 대출과목 표 채권사명 매칭 (순번이 없는 표 형식 대응) - 순번이 있고 사전스캔이 담보로 판정 안 했으면 이름 매칭 무시 (동일 채권사 다른 채권 오분류 방지)
+                    val isDamboByLoanCatName = rowSeqNum == 0 && matchesLoanCatDambo(rawCreditorName, loanCatDamboCreditorNames)
                     // 대출과목 표에서 "신용"으로 명시된 채권사명 → 담보 분류 무효화 (강제 신용)
                     val isCreditByLoanCatName = matchesLoanCatDambo(rawCreditorName, loanCatCreditCreditorNames)
                     // PDF 제외 담보 채권사와 매칭 → (290) 담보 판단
@@ -3558,10 +3584,23 @@ class MainActivity : AppCompatActivity() {
                                 parsedCreditorMap[rawCreditorName] = (parsedCreditorMap[rawCreditorName] ?: 0) + amountMan
                                 // 변제율 판단용 채무 유형별 집계
                                 val unjeonYearMonth = if (loanYear > 0 && loanMonth > 0) "${loanYear}.${loanMonth.toString().padStart(2, '0')}" else ""
-                                if (lineNoSpace.contains("운전자금")) guaranteeDebtMan += amountMan
-                                if (lineNoSpace.contains("지급보증")) jigubojungDebtMan += amountMan
-                                if (rawCreditorName.contains("대부")) { daebuDebtMan += amountMan; daebuCreditorNames.add(rawCreditorName) }
-                                if (rawCreditorName.contains("카드") || rawCreditorName.contains("캐피탈")) cardCapitalDebtMan += amountMan
+                                if (lineNoSpace.contains("운전자금")) {
+                                    guaranteeDebtMan += amountMan
+                                    guaranteeCreditorMap[rawCreditorName] = (guaranteeCreditorMap[rawCreditorName] ?: 0) + amountMan
+                                }
+                                if (lineNoSpace.contains("지급보증")) {
+                                    jigubojungDebtMan += amountMan
+                                    jigubojungCreditorMap[rawCreditorName] = (jigubojungCreditorMap[rawCreditorName] ?: 0) + amountMan
+                                }
+                                if (rawCreditorName.contains("대부")) {
+                                    daebuDebtMan += amountMan
+                                    daebuCreditorNames.add(rawCreditorName)
+                                    daebuCreditorAmountMap[rawCreditorName] = (daebuCreditorAmountMap[rawCreditorName] ?: 0) + amountMan
+                                }
+                                if (rawCreditorName.contains("카드") || rawCreditorName.contains("캐피탈")) {
+                                    cardCapitalDebtMan += amountMan
+                                    cardCapitalCreditorMap[rawCreditorName] = (cardCapitalCreditorMap[rawCreditorName] ?: 0) + amountMan
+                                }
                             }
 
                             if (!isDamboLoan && hasFinancialKeyword) {
@@ -3658,12 +3697,26 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     // 카드명 뒤에 x/X/- 가 이용금액 자리에 있으면 0만 처리 (뒤 금액은 이용한도이므로 무시)
                     val hasXBeforeAmount = Pattern.compile("^[^\\d]*[xX\\-]").matcher(lineNoSpace).find()
+                    // "N억M만" / "N억" 우선 매칭, 없으면 "M만"으로 폴백 (예: "국민1억2000만" → 12000만)
+                    val cardEokM = Pattern.compile("(\\d+)억(\\d+)?만?").matcher(lineNoSpace)
                     val cardAmountMatcher = Pattern.compile("(\\d[\\d,]*)만").matcher(lineNoSpace)
-                    if (!hasXBeforeAmount && cardAmountMatcher.find()) {
-                        val cardAmount = cardAmountMatcher.group(1)!!.replace(",", "").toIntOrNull() ?: 0
+                    var cardAmount = 0
+                    var amountStart = -1
+                    if (!hasXBeforeAmount) {
+                        if (cardEokM.find()) {
+                            val eok = cardEokM.group(1)?.toIntOrNull() ?: 0
+                            val man = cardEokM.group(2)?.toIntOrNull() ?: 0
+                            cardAmount = eok * 10000 + man
+                            amountStart = cardEokM.start()
+                        } else if (cardAmountMatcher.find()) {
+                            cardAmount = cardAmountMatcher.group(1)!!.replace(",", "").toIntOrNull() ?: 0
+                            amountStart = cardAmountMatcher.start()
+                        }
+                    }
+                    if (!hasXBeforeAmount && amountStart >= 0) {
                         // 첫 번째 금액 앞까지만 카드명 (병합 테이블의 뒤쪽 데이터 제외)
                         // "사업자" 접미어 제거 (예: "비씨사업자" → "비씨")
-                        val cardName = lineNoSpace.substring(0, cardAmountMatcher.start()).trim()
+                        val cardName = lineNoSpace.substring(0, amountStart).trim()
                             .replace("사업자", "").trim()
                         if (cardName.isNotEmpty() && cardAmount > 0) {
                             val fullCardName = cardName + "카드"
@@ -3800,6 +3853,49 @@ class MainActivity : AppCompatActivity() {
         if (parsedCardUsageTotal == 0 && cardUsageAmountMap.isNotEmpty()) {
             parsedCardUsageTotal = cardUsageAmountMap.values.sum()
             Log.d("HWP_CALC", "카드이용금액 테이블에서 합산: ${cardUsageAmountMap.entries.joinToString { "${it.key}=${it.value}만" }} → ${parsedCardUsageTotal}만")
+        }
+        // 타인명의 담보 reclassify: parsedCreditorMap의 매칭 채권사를 담보로 이동 (대상채무에서 제외)
+        for ((tpCreditor, tpAmount) in thirdPartyDamboMap) {
+            val matchKey = parsedCreditorMap.entries.firstOrNull { (k, v) ->
+                val baseName = k.replace(Regex("\\[.*?\\]"), "")
+                (baseName.contains(tpCreditor) || tpCreditor.contains(baseName)) &&
+                kotlin.math.abs(v - tpAmount) <= maxOf(100, tpAmount / 50)  // 허용오차 100만 또는 2%
+            }?.key
+            if (matchKey != null) {
+                val matched = parsedCreditorMap[matchKey] ?: 0
+                parsedDamboTotal += matched
+                parsedDamboCreditorMap[matchKey] = (parsedDamboCreditorMap[matchKey] ?: 0) + matched
+                parsedDamboCreditorNames.add(matchKey)
+                parsedCreditorMap.remove(matchKey)
+                guaranteeDebtMan -= guaranteeCreditorMap.remove(matchKey) ?: 0
+                jigubojungDebtMan -= jigubojungCreditorMap.remove(matchKey) ?: 0
+                daebuDebtMan -= daebuCreditorAmountMap.remove(matchKey) ?: 0
+                cardCapitalDebtMan -= cardCapitalCreditorMap.remove(matchKey) ?: 0
+                Log.d("HWP_CALC", "타인명의 담보 reclassify: $matchKey ${matched}만 → 담보 (감지=$tpCreditor ${tpAmount}만)")
+            } else {
+                Log.d("HWP_CALC", "타인명의 담보 매칭 실패: $tpCreditor ${tpAmount}만 - parsedCreditorMap=${parsedCreditorMap.keys}")
+            }
+        }
+        // 차량담보 reclassify: 차량 파싱에서 검출된 담보 금액 + 사이드바 담보 채권사명 매칭 → 담보로 이동
+        // 금액 매칭으로 동일 채권사의 다른 채무(신용 등) 오분류 방지
+        for (carDambo in carDamboAmountList) {
+            if (carDambo <= 0) continue
+            val matchKey = parsedCreditorMap.entries.firstOrNull { (k, v) ->
+                kotlin.math.abs(v - carDambo) <= maxOf(50, carDambo / 100) &&
+                matchesLoanCatDambo(k, loanCatDamboCreditorNames)
+            }?.key
+            if (matchKey != null) {
+                val matched = parsedCreditorMap[matchKey] ?: 0
+                parsedDamboTotal += matched
+                parsedDamboCreditorMap[matchKey] = (parsedDamboCreditorMap[matchKey] ?: 0) + matched
+                parsedDamboCreditorNames.add(matchKey)
+                parsedCreditorMap.remove(matchKey)
+                guaranteeDebtMan -= guaranteeCreditorMap.remove(matchKey) ?: 0
+                jigubojungDebtMan -= jigubojungCreditorMap.remove(matchKey) ?: 0
+                daebuDebtMan -= daebuCreditorAmountMap.remove(matchKey) ?: 0
+                cardCapitalDebtMan -= cardCapitalCreditorMap.remove(matchKey) ?: 0
+                Log.d("HWP_CALC", "차량담보 reclassify: $matchKey ${matched}만 → 담보 (차량담보=${carDambo}만)")
+            }
         }
         val parsedTargetDebt = totalParsedDebt - parsedDamboTotal
         targetDebt = parsedTargetDebt + parsedCardUsageTotal
@@ -4472,8 +4568,8 @@ class MainActivity : AppCompatActivity() {
         if (shortTermBlocked && !shortTermHardBlocked && shortTermBlockReason.isNotEmpty() && !shortTermResult.contains("불가")) {
             shortTermResult = "$shortTermResult ($shortTermBlockReason)"
         }
-        // 본인명의 집 또는 배우자 공동명의 집 → 집경매 위험 (재산초과 여부와 무관)
-        if ((hasOwnRealEstate || hasSpouseCoOwned) && shortTermDebt > 0) {
+        // 대출과목에 "집담보" 키워드 있을 때만 → 집경매 위험 (본인 부동산이라도 본인 명의 집담보대출이 없으면 위험 없음)
+        if (hasHomeMortgageInSidebar && shortTermDebt > 0) {
             shortTermBlocked = true
             if (shortTermBlockReason.isNotEmpty()) shortTermBlockReason += ", "
             shortTermBlockReason += "집경매 위험"
@@ -4840,8 +4936,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (spouseSecret) specialNotesList.add("배우자 모르게")
         if (familySecret) specialNotesList.add("가족 모르게")
-        if (hasOwnRealEstate) specialNotesList.add("집경매 위험")
-        if (hasSpouseCoOwned) specialNotesList.add("집경매 위험")
+        if (hasHomeMortgageInSidebar) specialNotesList.add("집경매 위험")
         if (hasAuction) specialNotesList.add("경매진행중")
         if (hasSeizure) specialNotesList.add("압류진행중")
         if (delinquentDays >= 90) specialNotesList.add("장기연체자")
@@ -5050,12 +5145,19 @@ class MainActivity : AppCompatActivity() {
             longTermIsFullPayment = ltResult.isFullPayment
         }
         // 1인가구 + 소득 250만 이상 → 장기 기간 1년 단축 후 월 변제금 재계산 (부모 여부 무관)
-        if (!longTermFullyBlocked && finalYear > 1 && income >= 250 && householdForShinbok == 1) {
+        if (!longTermFullyBlocked && finalYear > 3 && income >= 250 && householdForShinbok == 1) {
             val oldYear = finalYear; val oldMonthly = finalMonthly
             finalYear -= 1
-            val newMonths = finalYear * 12
+            var newMonths = finalYear * 12
             finalMonthly = if (newMonths > 0) (totalPayment + newMonths - 1) / newMonths else oldMonthly
-            finalMonthly = (finalMonthly + 4) / 5 * 5  // 5만 단위 올림
+            finalMonthly = finalMonthly / 5 * 5  // 5만 단위 내림 (대상채무 초과 방지)
+            // 내림 후 40만보다 작으면 년수를 더 줄임
+            while (finalYear > 1 && finalMonthly < 40) {
+                finalYear -= 1
+                newMonths = finalYear * 12
+                finalMonthly = if (newMonths > 0) (totalPayment + newMonths - 1) / newMonths else finalMonthly
+                finalMonthly = finalMonthly / 5 * 5
+            }
             if (longTermUseMonths) longTermDisplayMonths = newMonths
             Log.d("HWP_CALC", "1인가구+소득250↑ → 장기 -1년: ${oldYear}년/${oldMonthly}만 → ${finalYear}년/${finalMonthly}만")
         }
@@ -5755,6 +5857,17 @@ class MainActivity : AppCompatActivity() {
             diagnosis = "회워"
             Log.d("HWP_CALC", "장기연체 90일+ → 회워로 변경")
         }
+        // 장기(신복위) 채무한도 초과 → 신복위 제도(신/프/유/워) 모두 불가 → 회생만 단순 진행
+        if (longTermDebtOverLimit && !isBangsaeng) {
+            val standardLabels = setOf("신회워", "신유워", "프회워", "프유워", "회워", "워회워")
+            val before = diagnosis
+            diagnosis = when {
+                diagnosis == "워유워" -> "방생"  // 회생 불가 + 신복위 불가 → 단기 모두 불가 → 방생
+                diagnosis in standardLabels -> "단순유리"  // 회생만 가능 → 단순 진행
+                else -> diagnosis
+            }
+            if (before != diagnosis) Log.d("HWP_CALC", "장기 채무한도 초과 → 단순 회생 진행: $before → $diagnosis")
+        }
 
         // 장기 라벨이 최종 진단과 불일치하면 동기화
         // 새새/새/회새는 새출발 진단이고, 단기성 진단도 장기 라벨과 다른 계열이므로 장기 원래 라벨 유지
@@ -6202,12 +6315,19 @@ class MainActivity : AppCompatActivity() {
         val clientUseMonths = ltResult?.useMonths ?: false
         var clientDisplayMonths = ltResult?.displayMonths ?: 0
         // 1인가구 + 소득 250만 이상 → 장기 기간 1년 단축 후 월 변제금 재계산 (부모 여부 무관)
-        if (clientFinalYear > 1 && income >= 250 && householdForShinbok == 1) {
+        if (clientFinalYear > 3 && income >= 250 && householdForShinbok == 1) {
             val oldYear = clientFinalYear; val oldMonthly = clientFinalMonthly
             clientFinalYear -= 1
-            val newMonths = clientFinalYear * 12
+            var newMonths = clientFinalYear * 12
             clientFinalMonthly = if (newMonths > 0) (totalPayment + newMonths - 1) / newMonths else oldMonthly
-            clientFinalMonthly = (clientFinalMonthly + 4) / 5 * 5
+            clientFinalMonthly = clientFinalMonthly / 5 * 5  // 5만 단위 내림 (대상채무 초과 방지)
+            // 내림 후 50만보다 작으면 년수를 더 줄임
+            while (clientFinalYear > 1 && clientFinalMonthly < 50) {
+                clientFinalYear -= 1
+                newMonths = clientFinalYear * 12
+                clientFinalMonthly = if (newMonths > 0) (totalPayment + newMonths - 1) / newMonths else clientFinalMonthly
+                clientFinalMonthly = clientFinalMonthly / 5 * 5
+            }
             if (clientUseMonths) clientDisplayMonths = newMonths
             Log.d("HWP_CALC", "거래처 1인가구+소득250↑ → 장기 -1년: ${oldYear}년/${oldMonthly}만 → ${clientFinalYear}년/${clientFinalMonthly}만")
         }
