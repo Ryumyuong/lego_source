@@ -3146,7 +3146,18 @@ class MainActivity : AppCompatActivity() {
                         if (!segHasResult && !contentHasAnyResult && seg.contains("진행중")) {
                             delinquentDays = maxOf(delinquentDays, 1095)
                             hasOngoingProcess = true
-                            Log.d("HWP_PARSE", "제도 진행중 (세그먼트) → 장기연체자: $seg")
+                            if (ongoingProcessName.isEmpty()) {
+                                ongoingProcessName = when {
+                                    segNoSpace.contains("신속") -> "신"
+                                    segNoSpace.contains("사전") -> "프"
+                                    segNoSpace.contains("회생") -> "회"
+                                    segNoSpace.contains("워크") -> "워"
+                                    segNoSpace.contains("새출발") -> "새"
+                                    segNoSpace.contains("신복") || segNoSpace.contains("신용회복") -> "워"
+                                    else -> "회"  // 키워드 미식별 시 회생 진행중으로 가정 (장기연체자 + 진행중 케이스에서 가장 흔함)
+                                }
+                            }
+                            Log.d("HWP_PARSE", "제도 진행중 (세그먼트) → 장기연체자: $seg (제도=$ongoingProcessName)")
                         }
                     }
                 }
@@ -5720,11 +5731,11 @@ class MainActivity : AppCompatActivity() {
         }
         if (canApplySae && saeTotalPayment > 0) {
             val saeBugyeol = netProperty - targetDebt >= 10000 || longTermPropertyExcess || propertyExcessWithGuarantee
-            longTermText.append("\n[새새] ${saeMonthly}만 / ${saeYears}년납${if (saeBugyeol) " (부결고지)" else ""}")
+            longTermText.append("\n[새출발] ${saeMonthly}만 / ${saeYears}년납${if (saeBugyeol) " (부결고지)" else ""}")
         } else if (hasBusinessHistory && isBusinessOwner && saeDebtOverLimit) {
-            longTermText.append("\n[새새] 새새 불가(채무한도초과 담보${formatToEok(totalSecuredDebt)})")
+            longTermText.append("\n[새출발] 새새 불가(채무한도초과 담보${formatToEok(totalSecuredDebt)})")
         } else if (hasBusinessHistory && isBusinessOwner && saePropertyExcess) {
-            longTermText.append("\n[새새] 새새 불가(재산초과)")
+            longTermText.append("\n[새출발] 새새 불가(재산초과)")
         }
         // binding.test2는 finalDiagnosis 확정 후 설정
 
@@ -5796,9 +5807,13 @@ class MainActivity : AppCompatActivity() {
             if (baseDiag.startsWith("신") || baseDiag.startsWith("프") || baseDiag.startsWith("워")) {
                 baseDiag = baseDiag.substring(1)
             }
+            // 회생 진행중이면 회 prefix 중복 제거 (회워 → 워, 회새 → 새)
+            if (ongoingProcessName == "회" && baseDiag.startsWith("회")) {
+                baseDiag = baseDiag.substring(1)
+            }
             val isSaeBaseDiag = baseDiag.startsWith("새새") || baseDiag.startsWith("회새") || baseDiag.startsWith("새")
-            if (isSaeBaseDiag && ongoingProcessName != "새") {
-                // 새새/회새/새 진단은 진행중 제도 prefix 없이 그대로 유지 (단, 진행중이 새출발이면 (새) prefix 추가)
+            if (isSaeBaseDiag && ongoingProcessName != "새" && ongoingProcessName != "회") {
+                // 새새/회새/새 진단은 진행중 제도(신/프/워) prefix 없이 그대로 유지
                 diagnosis = baseDiag
             } else if (isSaeBaseDiag && ongoingProcessName == "새") {
                 // 새출발 진행중 + 새 계열 진단 → (새)새, (새)회새, (새)새새
@@ -5966,8 +5981,14 @@ class MainActivity : AppCompatActivity() {
             // " / 회워" → " / (워)회워" 등
             for (diag in listOf("회워", "신유워", "프유워", "신회워", "프회워", "워유워")) {
                 if (ltText.contains(" / $diag") && !ltText.contains(" / $ongoingPrefix")) {
+                    // 회생 진행중이면 회 prefix 중복 제거 (회워 → 워)
+                    val replacement = if (ongoingProcessName == "회" && diag.startsWith("회") && !diag.startsWith("회새")) {
+                        "$ongoingPrefix${diag.substring(1)}"
+                    } else {
+                        "$ongoingPrefix$diag"
+                    }
                     longTermText.clear()
-                    longTermText.append(ltText.replace(" / $diag", " / $ongoingPrefix$diag"))
+                    longTermText.append(ltText.replace(" / $diag", " / $replacement"))
                     break
                 }
             }
@@ -6377,7 +6398,11 @@ class MainActivity : AppCompatActivity() {
                     Math.ceil(totalPayment.toDouble() / maxMonths).toInt()
                 } else clientFinalMonthly
                 val clientPeriodStr = if (clientUseMonths) "${dispMonths}개월납" else "${clientFinalYear}년납"
-                val clientLtLabel = if (hasOngoingProcess && ongoingProcessName.isNotEmpty() && longTermDiagLabel.isNotEmpty() && !longTermDiagLabel.startsWith("(")) "($ongoingProcessName)$longTermDiagLabel" else longTermDiagLabel
+                val clientLtLabel = if (hasOngoingProcess && ongoingProcessName.isNotEmpty() && longTermDiagLabel.isNotEmpty() && !longTermDiagLabel.startsWith("(")) {
+                    // 회생 진행중이면 회 prefix 중복 제거 (회워 → 워)
+                    val baseLabel = if (ongoingProcessName == "회" && longTermDiagLabel.startsWith("회") && !longTermDiagLabel.startsWith("회새")) longTermDiagLabel.substring(1) else longTermDiagLabel
+                    "($ongoingProcessName)$baseLabel"
+                } else longTermDiagLabel
                 val clientDiagSuffix = if (clientLtLabel.isNotEmpty()) " / $clientLtLabel" else ""
                 clientLongTermText.append("[장기] ${clientMonthlyForDisplay}만 / $clientPeriodStr$studentLoanLongSuffix$clientDiagSuffix")
             } else {
@@ -6385,11 +6410,11 @@ class MainActivity : AppCompatActivity() {
             }
             if (canApplySae && clientSaeTotalPayment > 0) {
                 val saeBugyeol = netProperty - targetDebt >= 10000 || longTermFullyBlocked
-                clientLongTermText.append("\n[새새] ${clientSaeMonthly}만 / ${clientSaeYears}년납${if (saeBugyeol) " (부결고지)" else ""}")
+                clientLongTermText.append("\n[새출발] ${clientSaeMonthly}만 / ${clientSaeYears}년납${if (saeBugyeol) " (부결고지)" else ""}")
             } else if (hasBusinessHistory && isBusinessOwner && saeDebtOverLimit) {
-                clientLongTermText.append("\n[새새] 새새 불가(채무한도초과 담보${formatToEok(totalSecuredDebt)})")
+                clientLongTermText.append("\n[새출발] 새새 불가(채무한도초과 담보${formatToEok(totalSecuredDebt)})")
             } else if (hasBusinessHistory && isBusinessOwner && saePropertyExcess) {
-                clientLongTermText.append("\n[새새] 새새 불가(재산초과)")
+                clientLongTermText.append("\n[새출발] 새새 불가(재산초과)")
             }
             // 부결고지 적용
             val daebuRatioClient = if (originalTargetDebt > 0) daebuDebtMan.toDouble() / originalTargetDebt * 100 else 0.0
