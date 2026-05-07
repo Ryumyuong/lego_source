@@ -1923,7 +1923,7 @@ class MainActivity : AppCompatActivity() {
                 Log.d("HWP_PRESCAN", "대출과목 집담보 감지 → 집경매 위험: ${rawLine.trim()}")
             }
             // 패턴기반: "N + 채권사명 + 차량담보/차담보 등" (테이블 합쳐진 경우 대응, 영문/전각 대응)
-            val damboM = Pattern.compile("(\\d{1,2})(?!년)([^\\d]{2,}?)(?:차량담보|차량할부|차량리스|자동차담보|차담보|집담보|기계담보|중도금대출|중도금)").matcher(l)
+            val damboM = Pattern.compile("(\\d{1,2})(?!년)([^\\d]{2,}?)(?:차량담보|차량할부|차량리스|자동차담보|차담보|집담보|기계담보|중도금대출|중도금|주택담보|부동산담보|아파트담보)").matcher(l)
             while (damboM.find()) {
                 val seqNum = damboM.group(1)!!.toInt()
                 if (seqNum in 1..30) {
