@@ -1758,6 +1758,7 @@ class MainActivity : AppCompatActivity() {
         val jilgwonOCreditors = mutableSetOf<String>()  // 질권설정o 채권사 (담보 유지)
         val jilgwonXCreditors = mutableSetOf<String>()  // 질권설정x 채권사 (담보→대상채무 포함)
         var excludedSeqNumbers = mutableSetOf<Int>()  // 대출과목에서 제외할 순번
+        var guaranteeSeqNumbers = mutableSetOf<Int>()  // 대출과목 담보여부가 "보증서담보대출"인 순번 → 지급보증(240) 분류
         var includedSeqNumbers = mutableSetOf<Int>()  // 강제 포함할 순번 (순번N 신용대출)
         var hasHwangsangSeqHeader = false  // 채무현황 표(현황순번 채권사명 담보여부) 감지 플래그 — 이 표에 없는 순번은 담보 keyword라도 신용으로 처리
         val loanCatDamboCreditorNames = mutableSetOf<String>()  // 대출과목에서 담보 키워드와 함께 등장한 채권사명 (순번 매칭 실패 시 이름 매칭용)
@@ -1895,6 +1896,8 @@ class MainActivity : AppCompatActivity() {
             if (preScanLoanCat && (l.contains("담보") || l.contains("할부") || l.contains("리스") || l.contains("중도금") || l.contains("약관") || l.contains("후순위") || l.contains("보증금") || l.contains("전세") || l.contains("채무아님"))) {
                 // 채권사명 추출 (순번이 없는 라인에서도 이름 매칭으로 담보 처리)
                 extractLoanCatCreditorNames(l, loanCatDamboCreditorNames)
+                // 보증서담보대출 → 지급보증(240) 분류용
+                val isGuaranteeDamboLine = l.contains("보증서담보") || l.contains("보증담보") || l.contains("지급보증")
                 // 콤마 구분 순번 감지: "7,8" "6,10" 등
                 val commaSeqM = Pattern.compile("(\\d{1,2}(?:,\\d{1,2})+)").matcher(l)
                 while (commaSeqM.find()) {
@@ -1903,7 +1906,8 @@ class MainActivity : AppCompatActivity() {
                         val seqNum = part.toIntOrNull() ?: continue
                         if (seqNum in 1..30) {
                             excludedSeqNumbers.add(seqNum)
-                            Log.d("HWP_PRESCAN", "섹션기반 담보 순번(콤마): $seqNum - ${rawLine.trim()}")
+                            if (isGuaranteeDamboLine) guaranteeSeqNumbers.add(seqNum)
+                            Log.d("HWP_PRESCAN", "섹션기반 담보 순번(콤마): $seqNum${if (isGuaranteeDamboLine) " [보증서담보→지급보증]" else ""} - ${rawLine.trim()}")
                         }
                     }
                 }
@@ -1913,7 +1917,8 @@ class MainActivity : AppCompatActivity() {
                     val seqNum = seqM.group(1)!!.toInt()
                     if (seqNum in 1..30) {
                         excludedSeqNumbers.add(seqNum)
-                        Log.d("HWP_PRESCAN", "섹션기반 담보 순번: $seqNum - ${rawLine.trim()}")
+                        if (isGuaranteeDamboLine) guaranteeSeqNumbers.add(seqNum)
+                        Log.d("HWP_PRESCAN", "섹션기반 담보 순번: $seqNum${if (isGuaranteeDamboLine) " [보증서담보→지급보증]" else ""} - ${rawLine.trim()}")
                     }
                 }
             }
@@ -2720,12 +2725,6 @@ class MainActivity : AppCompatActivity() {
                 Log.d("HWP_PARSE", "건강보험 체납 감지: $line")
             }
 
-            // 보험 대출 감지 (대상채무 제외)
-            if (lineNoSpace.contains("보험") && (lineNoSpace.contains("대출") || lineNoSpace.contains("약관"))) {
-                hasInsurancePolicyLoan = true
-                Log.d("HWP_PARSE", "보험대출 감지: $line")
-            }
-
             // 질권설정 채권사별 구분 (x=대상채무 포함, o=담보 유지)
             if (hasNoJilgwon(lineNoSpace, line)) {
                 jeonseNoJilgwon = true
@@ -3412,6 +3411,7 @@ class MainActivity : AppCompatActivity() {
                             parsedDamboCreditorNames.add(credName)
                             parsedDamboCreditorMap[credName] = (parsedDamboCreditorMap[credName] ?: 0) + amountMan
                         }
+                        if (isInsurancePolicy) hasInsurancePolicyLoan = true
                         Log.d("HWP_PARSE", "채무현황 순번 파싱: 담보 제외 - $credName ${amountMan}만 (담보=${ loanType.contains("담보")}, 순번제외=$isDamboBySeq, 약관=$isInsurancePolicy) - $line")
                     } else if (credName.length >= 2 && amountMan > 0) {
                         totalParsedDebt += amountMan
@@ -3509,7 +3509,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     val loanTypeToken = creditorTokens.firstOrNull { it.contains("대출") && it.contains(Regex("\\(\\d+\\)")) } ?: ""
                     val isInsurancePolicyLoan = loanTypeToken.contains("보험") || lineNoSpace.contains("(약관)") || lineNoSpace.contains("약관대출") || lineNoSpace.contains("약관") || lineNoSpace.contains("보험담보")
-                    val isGuaranteeLoan = lineNoSpace.contains("지급보증") || lineNoSpace.contains("보증담보") || lineNoSpace.contains("보증서담보")
+                    val isGuaranteeLoan = lineNoSpace.contains("지급보증") || lineNoSpace.contains("보증담보") || lineNoSpace.contains("보증서담보") || (rowSeqNum > 0 && guaranteeSeqNumbers.contains(rowSeqNum))
                     val creditorNameForJilgwon = rawCreditorName.replace(Regex("\\[.*"), "")
                     val isJilgwonOCreditor = jilgwonOCreditors.any { creditorNameForJilgwon.contains(it) || it.contains(creditorNameForJilgwon) }
                     val isJilgwonXCreditor = jilgwonXCreditors.any { creditorNameForJilgwon.contains(it) || it.contains(creditorNameForJilgwon) }
@@ -3636,7 +3636,7 @@ class MainActivity : AppCompatActivity() {
                                     guaranteeDebtMan += amountMan
                                     guaranteeCreditorMap[rawCreditorName] = (guaranteeCreditorMap[rawCreditorName] ?: 0) + amountMan
                                 }
-                                if (lineNoSpace.contains("지급보증")) {
+                                if (lineNoSpace.contains("지급보증") || (rowSeqNum > 0 && guaranteeSeqNumbers.contains(rowSeqNum))) {
                                     jigubojungDebtMan += amountMan
                                     jigubojungCreditorMap[rawCreditorName] = (jigubojungCreditorMap[rawCreditorName] ?: 0) + amountMan
                                 }
@@ -5604,7 +5604,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     val canDansun = !isSaeDiagnosis && isDanSunYuri
                     val immediatePrefix = if (!isSaeDiagnosis && !longTermFullyBlocked && finalYear > 0 && !dischargeWithin5Years && !hasHfcMortgage && !isSameYearMonthAsToday(thresholdCal)) "회워 바로 가능, " else ""
-                    val immediateNote = if (canDansun && !isIncomeEstimated && !dischargeWithin5Years) ", 단순 바로 가능" else ""
+                    val immediateNote = if (canDansun && !isIncomeEstimated && !dischargeWithin5Years && !spouseSecret) ", 단순 바로 가능" else ""
                     val cdNote = if (canAfterCarDisposal) ", 차량 처분 후 바로 가능" else ""
                     fun stripLabel(s: String) = s.replace(",", "").replace("바로 가능", "").replace("구직 이후 가능", "").trim()
                     if (afterDiag.isNotEmpty() && (stripLabel(immediateNote) == afterDiag || stripLabel(immediatePrefix) == afterDiag)) {
@@ -6018,7 +6018,8 @@ class MainActivity : AppCompatActivity() {
         if (shortTermCarSaleApplied) finalDiagnosis = "차량 처분 시 $finalDiagnosis"
         if (diagnosis != "방생") {
             val daebuRatio = if (originalTargetDebt > 0) daebuDebtMan.toDouble() / originalTargetDebt * 100 else 0.0
-            val isLongTermBugyeol = (repaymentRate == 100 && originalTargetDebt > 4000) || daebuRatio > 50 || (repaymentRate == 100 && majorCreditorRatio >= 50) || ownRealEstateCount == 2
+            // 단기 가능하면 장기 부결고지 제외 (신복위 부결되어도 회생으로 대체 가능)
+            val isLongTermBugyeol = ((repaymentRate == 100 && originalTargetDebt > 4000) || daebuRatio > 50 || (repaymentRate == 100 && majorCreditorRatio >= 50) || ownRealEstateCount == 2) && shortTermTotal <= 0
             if (isLongTermBugyeol) {
                 val newLt = longTermText.toString().replace(Regex("(\\[장기\\][^\n]*)")) { mr ->
                     val line = mr.value
@@ -6060,16 +6061,16 @@ class MainActivity : AppCompatActivity() {
                         add(Calendar.MONTH, paymentCount)
                     }
                     val ltText = longTermText.toString()
-                    if (afterCal.before(hoeCal)) {
-                        // 이후 가능 날짜가 더 빠름 → 장기 라벨을 이후 가능 제도로 변경
+                    if (!afterCal.after(hoeCal)) {
+                        // 이후 가능 날짜가 회워 deadline과 같거나 더 빠름 → 회생 path가 자동으로 우선, 납부 후 회워 표기 불필요
                         if (longTermDiagLabel.isNotEmpty() && ltText.contains(" / $longTermDiagLabel")) {
                             longTermText.clear()
                             longTermText.append(ltText.replace(" / $longTermDiagLabel", " / $afterLabel"))
                         }
                         adjustedLtLabel = afterLabel
-                        // 진단 순서도 이후 가능을 앞으로
-                        finalDiagnosis = "$afterLabel ${dateMatch.groupValues[2]} 이후 가능, $paymentNote"
-                        Log.d("HWP_CALC", "이후 가능이 더 빠름 → 장기 라벨: $afterLabel, 진단: $finalDiagnosis")
+                        // 이후 가능만 표기 (납부 후 회워 제거: 이후 가능 날짜에 회생이 풀리므로 납부 안내 불필요)
+                        finalDiagnosis = "$afterLabel ${dateMatch.groupValues[2]} 이후 가능"
+                        Log.d("HWP_CALC", "이후 가능이 회워보다 빠르거나 같음 → 장기 라벨: $afterLabel, 진단: $finalDiagnosis (납부 후 회워 제거)")
                     } else {
                         // 회워가 더 빠름 → 납부 후 적용이므로 항상 "회워"
                         val hoeLabel = "회워"
@@ -6561,9 +6562,9 @@ class MainActivity : AppCompatActivity() {
             } else if (hasBusinessHistory && isBusinessOwner && saePropertyExcess) {
                 clientLongTermText.append("\n[새출발] 새새 불가(재산초과)")
             }
-            // 부결고지 적용
+            // 부결고지 적용 (단기 가능하면 제외 - 신복위 부결되어도 회생으로 대체 가능)
             val daebuRatioClient = if (originalTargetDebt > 0) daebuDebtMan.toDouble() / originalTargetDebt * 100 else 0.0
-            val isClientBugyeol = (repaymentRate == 100 && originalTargetDebt > 4000) || daebuRatioClient > 50 || (repaymentRate == 100 && majorCreditorRatio >= 50) || ownRealEstateCount == 2
+            val isClientBugyeol = ((repaymentRate == 100 && originalTargetDebt > 4000) || daebuRatioClient > 50 || (repaymentRate == 100 && majorCreditorRatio >= 50) || ownRealEstateCount == 2) && shortTermTotal <= 0
             if (isClientBugyeol) {
                 val newClt = clientLongTermText.toString().replace(Regex("(\\[장기\\][^\n]*)")) { mr ->
                     val line = mr.value
@@ -6619,27 +6620,29 @@ class MainActivity : AppCompatActivity() {
         recentDebtEntries: List<Pair<Calendar, Int>>,
         twoMonthDebt: Int, threeMonthDebt: Int, fourMonthDebt: Int
     ): Triple<Calendar?, Int, String> {
+        // 기간 내 1개의 채무가 threshold 이상이면 해당 채무 발생일 + resultMonths개월 후 회워
         val candidates = mutableListOf<Pair<Calendar, String>>()
         val rules = listOf(
-            Triple(fourMonthDebt >= 5000, 4, 6) to "4개월≥5000→6",
-            Triple(threeMonthDebt >= 5000, 3, 6) to "3개월≥5000→6",
-            Triple(threeMonthDebt >= 4000, 3, 5) to "3개월≥4000→5",
-            Triple(twoMonthDebt >= 5000, 2, 6) to "2개월≥5000→6",
-            Triple(twoMonthDebt >= 4000, 2, 5) to "2개월≥4000→5",
-            Triple(twoMonthDebt >= 1000, 2, 4) to "2개월≥1000→4"
+            Triple(4, 5000, 5) to "4개월≥5000→5",
+            Triple(3, 5000, 5) to "3개월≥5000→5",
+            Triple(3, 4000, 4) to "3개월≥4000→4",
+            Triple(2, 5000, 5) to "2개월≥5000→5",
+            Triple(2, 4000, 4) to "2개월≥4000→4",
+            Triple(2, 1000, 3) to "2개월≥1000→3"
         )
-        for ((cond, name) in rules) {
-            if (!cond.first) continue
-            val bucketMonths = cond.second
-            val resultMonths = cond.third
+        for ((rule, name) in rules) {
+            val (bucketMonths, threshold, resultMonths) = rule
             val boundary = Calendar.getInstance().apply { add(Calendar.MONTH, -bucketMonths) }
-            val oldest = recentDebtEntries.filter { it.first.after(boundary) }
-                .minByOrNull { it.first.timeInMillis }?.first ?: continue
+            // 기간 내 채무 중 단일 금액이 threshold 이상인 것만 추출 (합산 아님)
+            val qualifyingDebts = recentDebtEntries.filter { it.first.after(boundary) && (it.second + 5) / 10 >= threshold }
+            if (qualifyingDebts.isEmpty()) continue
+            // 여러 채무가 조건 만족 시 가장 늦은 채무 기준 (제약이 가장 늦게 풀림)
+            val latestQualifying = qualifyingDebts.maxByOrNull { it.first.timeInMillis }!!.first
             val cal = Calendar.getInstance().apply {
-                timeInMillis = oldest.timeInMillis
+                timeInMillis = latestQualifying.timeInMillis
                 add(Calendar.MONTH, resultMonths)
             }
-            candidates.add(cal to "$name(채권${oldest.get(Calendar.YEAR)}.${oldest.get(Calendar.MONTH) + 1}.${oldest.get(Calendar.DAY_OF_MONTH)}+${resultMonths}개월)")
+            candidates.add(cal to "$name(채권${latestQualifying.get(Calendar.YEAR)}.${latestQualifying.get(Calendar.MONTH) + 1}.${latestQualifying.get(Calendar.DAY_OF_MONTH)}+${resultMonths}개월)")
         }
         val latest = candidates.maxByOrNull { it.first.timeInMillis }
         if (latest == null) return Triple(null, 0, "")
