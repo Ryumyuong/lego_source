@@ -4896,7 +4896,7 @@ class MainActivity : AppCompatActivity() {
         // 장기(신복위) 보수 + 공격 + 최종 계산 (공통 함수 사용)
         val ltResult = calcLongTermValues(
             totalPayment, targetDebt, longTermIncome, livingCostShinbok, livingCostTable, parentDeduction,
-            householdForShinbok, parentCount, isFreelancer, longTermIsFullPayment,
+            householdForShinbok, parentCount, (isFreelancer || noSocialInsurance), longTermIsFullPayment,
             hasWolse, parsedDamboTotal,
             hasAuction, hasSeizure, hasGambling, hasStock, hasCrypto,
             recentDebtRatio, delinquentDays, hasOwnRealEstate,
@@ -5058,6 +5058,7 @@ class MainActivity : AppCompatActivity() {
         if (spouseSecret) specialNotesList.add("배우자 모르게")
         if (familySecret) specialNotesList.add("가족 모르게")
         if (hasHomeMortgageInSidebar) specialNotesList.add("집경매 위험")
+        if (ownRealEstateCount >= 2) specialNotesList.add("본인명의 부동산 2개 이상")
         if (hasAuction) specialNotesList.add("경매진행중")
         if (hasSeizure) specialNotesList.add("압류진행중")
         if (delinquentDays >= 90) specialNotesList.add("장기연체자")
@@ -5266,7 +5267,7 @@ class MainActivity : AppCompatActivity() {
             longTermIsFullPayment = ltResult.isFullPayment
         }
         // 1인가구 + 소득 250만 이상 → 장기 기간 1년 단축 후 월 변제금 재계산 (부모 여부 무관)
-        if (!longTermFullyBlocked && finalYear > 3 && income >= 250 && householdForShinbok == 1) {
+        if (!longTermFullyBlocked && finalYear > 3 && income >= 250 && householdForShinbok == 1 && !(isFreelancer || noSocialInsurance)) {
             val oldYear = finalYear; val oldMonthly = finalMonthly
             finalYear -= 1
             var newMonths = finalYear * 12
@@ -6161,7 +6162,7 @@ class MainActivity : AppCompatActivity() {
         // 거래처 진단 계산 + 결과 표시
         calculateClientDiagnosis(
             targetDebt, totalPayment, longTermIncome, livingCostShinbok, parentDeduction,
-            longTermFullyBlocked, isFreelancer, longTermIsFullPayment,
+            longTermFullyBlocked, (isFreelancer || noSocialInsurance), longTermIsFullPayment,
             hasAuction, hasSeizure, hasGambling, hasStock, hasCrypto,
             recentDebtRatio, delinquentDays, hasOwnRealEstate,
             majorCreditorRatio, shortTermTotal, longTermTotal,
@@ -6230,8 +6231,8 @@ class MainActivity : AppCompatActivity() {
                 monthly = minMonthly
             }
         }
-        // 월변제금 50만 이하 → 소득 기반 재계산
-        if (monthly in 1..50 && income > 0) {
+        // 월변제금이 minMonthly 이하일 때만 → 소득 기반 재계산 (본인 ≤40, 거래처 ≤50)
+        if (monthly in 1..minMonthly && income > 0) {
             val isAlone = householdForShinbok == 1 && parentCount == 0
             val isHeavy = hasWolse || parsedDamboTotal > 0 || householdForShinbok >= 3
             monthly = when {
@@ -6261,19 +6262,16 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 프리랜서 (공격 월변제금보다 낮으면 일반 보수 계산 유지)
+        // 프리랜서: 장기총액을 6년(72개월)으로 분할 (가드 제거 - 무조건 적용)
         if (isFreelancer && targetDebt > 0 && totalPayment > 0) {
             val freelancerMonthly = Math.ceil(totalPayment.toDouble() / 72).toInt()
-            val aggressiveCheck = Math.ceil((income - livingCostShinbok - parentDeduction) * 2.0 / 3.0).toInt().coerceAtLeast(minMonthly)
-            if (freelancerMonthly >= aggressiveCheck) {
-                if (freelancerMonthly <= minMonthly) {
-                    conservativeMonthly = minMonthly
-                    conservativeYears = Math.round(totalPayment.toDouble() / minMonthly / 12.0).toInt()
-                    conservativeYears = conservativeYears.coerceIn(3, maxYears)
-                } else {
-                    conservativeMonthly = freelancerMonthly
-                    conservativeYears = 6
-                }
+            if (freelancerMonthly <= minMonthly) {
+                conservativeMonthly = minMonthly
+                conservativeYears = Math.round(totalPayment.toDouble() / minMonthly / 12.0).toInt()
+                conservativeYears = conservativeYears.coerceIn(3, maxYears)
+            } else {
+                conservativeMonthly = freelancerMonthly
+                conservativeYears = 6
             }
         }
 
@@ -6515,7 +6513,7 @@ class MainActivity : AppCompatActivity() {
         val clientUseMonths = ltResult?.useMonths ?: false
         var clientDisplayMonths = ltResult?.displayMonths ?: 0
         // 1인가구 + 소득 250만 이상 → 장기 기간 1년 단축 후 월 변제금 재계산 (부모 여부 무관)
-        if (clientFinalYear > 3 && income >= 250 && householdForShinbok == 1) {
+        if (clientFinalYear > 3 && income >= 250 && householdForShinbok == 1 && !isFreelancer) {
             val oldYear = clientFinalYear; val oldMonthly = clientFinalMonthly
             clientFinalYear -= 1
             var newMonths = clientFinalYear * 12
