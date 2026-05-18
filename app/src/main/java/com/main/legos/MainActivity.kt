@@ -1927,12 +1927,23 @@ class MainActivity : AppCompatActivity() {
                 Log.d("HWP_PRESCAN", "대출과목 집담보 감지 → 집경매 위험: ${rawLine.trim()}")
             }
             // 패턴기반: "N + 채권사명 + 차량담보/차담보 등" (테이블 합쳐진 경우 대응, 영문/전각 대응)
-            val damboM = Pattern.compile("(\\d{1,2})(?!년)([^\\d]{2,}?)(?:차량담보|차량할부|차량리스|자동차담보|차담보|집담보|기계담보|중도금대출|중도금|주택담보|부동산담보|아파트담보)").matcher(l)
+            val damboM = Pattern.compile("((?:\\d{1,2},)*\\d{1,2})(?!년)([^\\d]{2,}?)(?:차량담보|차량할부|차량리스|자동차담보|차담보|집담보|기계담보|중도금대출|중도금|주택담보|부동산담보|아파트담보)").matcher(l)
             while (damboM.find()) {
-                val seqNum = damboM.group(1)!!.toInt()
-                if (seqNum in 1..30) {
-                    excludedSeqNumbers.add(seqNum)
-                    Log.d("HWP_PRESCAN", "패턴기반 담보 순번: $seqNum (${damboM.group(0)}) - ${rawLine.trim()}")
+                val damboG0 = damboM.group(0) ?: ""
+                // 본인 채무현황/대출과목에 집·주택·부동산·아파트 담보대출 항목 → 집경매 위험 (단순 부동산 보유 X)
+                if (damboG0.contains("집담보") || damboG0.contains("주택담보") || damboG0.contains("부동산담보") || damboG0.contains("아파트담보")) {
+                    if (!hasHomeMortgageInSidebar) {
+                        hasHomeMortgageInSidebar = true
+                        Log.d("HWP_PRESCAN", "주택/집담보대출 항목 감지 → 집경매 위험: ${rawLine.trim()}")
+                    }
+                }
+                // "8,9,10,11에이피엘...차량담보대출" → 8,9,10,11 모두 담보 순번 (콤마 구분 대응)
+                for (part in damboM.group(1)!!.split(",")) {
+                    val seqNum = part.toIntOrNull() ?: continue
+                    if (seqNum in 1..30) {
+                        excludedSeqNumbers.add(seqNum)
+                        Log.d("HWP_PRESCAN", "패턴기반 담보 순번: $seqNum (${damboM.group(0)}) - ${rawLine.trim()}")
+                    }
                 }
             }
             // 학자금 취업 후 상환 / 일반 상환 순번 수집
@@ -4683,7 +4694,7 @@ class MainActivity : AppCompatActivity() {
         if (shortTermBlocked && !shortTermHardBlocked && shortTermBlockReason.isNotEmpty() && !shortTermResult.contains("불가")) {
             shortTermResult = "$shortTermResult ($shortTermBlockReason)"
         }
-        // 대출과목에 "집담보" 키워드 있을 때만 → 집경매 위험 (본인 부동산이라도 본인 명의 집담보대출이 없으면 위험 없음)
+        // 집경매 위험: 사이드바/채무현황에 집담보·주택담보 등 본인 명의 집담보대출 항목 있을 때 (단순 부동산 보유 X)
         if (hasHomeMortgageInSidebar && shortTermDebt > 0) {
             shortTermBlocked = true
             if (shortTermBlockReason.isNotEmpty()) shortTermBlockReason += ", "
@@ -5297,6 +5308,7 @@ class MainActivity : AppCompatActivity() {
         // 차량 처분시 단기 가능이면 단기 가능으로 판단
         val effectiveShortTermBlocked = shortTermBlocked && !shortTermCarSaleApplied
         val shortTermPropertyExcess = shortTermBlockReason.contains("재산초과")
+        val shortTermHomeAuctionRisk = shortTermBlockReason.contains("집경매 위험")  // 집경매 위험 → 회생 시 집 경매 → 중간 회 제거(회→유)
         val isDanSunYuri = !effectiveShortTermBlocked && !longTermDebtOverLimit && shortTermTotal > 0 && finalLongTermTotal - shortTermTotal > 1000
         val shortTermBlockedByDischarge = effectiveShortTermBlocked && dischargeWithin5Years && !dischargeEndsSameYear
         val lowIncome = income <= 100  // 소득 100만 이하 → 회생 불가
@@ -5765,7 +5777,10 @@ class MainActivity : AppCompatActivity() {
 
         // 장기 전용 진단 라벨 (최종 진단과 별개)
         val longTermDiagLabel = if (longTermFullyBlocked || longTermDebtOverLimit) "" else {
-            var label = if (!canDeferment) {
+            var label = if (diagnosis.startsWith("(") && diagnosis.endsWith("회")) {
+                // 진행 중 + 면책 해소 후 단순회생 추천((프유)회 등) → 장기 라벨도 진단과 동일 (회생 기준)
+                diagnosis
+            } else if (!canDeferment) {
                 // 유예불가 → 유예(유) 포함 불가
                 if (hoeBlocked) {
                     // 회생도 불가 → 진단명과 동일하게 표시
@@ -5794,11 +5809,11 @@ class MainActivity : AppCompatActivity() {
                     else -> if (dischargeEndSoonAllowsHoe) (if (longBetter) "신유워" else "신유회") else "신유워"
                 }
             }
-            // 중간 회→유 변환: 사업자, 단순재산초과, 한국주택금융공사 집담보, 동일 채권사가 담보+신용 보유, 또는 대상채무 4000만 이하
+            // 중간 회→유 변환: 사업자, 단순재산초과, 집경매 위험, 한국주택금융공사 집담보, 동일 채권사가 담보+신용 보유, 또는 대상채무 4000만 이하
             if (canDeferment) {
                 val hasSameCreditorDamboAndCredit = parsedDamboCreditorNames.any { it in parsedCreditorMap }
-                Log.d("HWP_CALC", "회→유 변환 체크: label=$label, 사업자=$isBusinessOwner, 재산초과=$shortTermPropertyExcess(reason=$shortTermBlockReason), 동일채권=$hasSameCreditorDamboAndCredit, 주택금융=$hasHfcMortgage, 소액=${targetDebt <= 4000}")
-                if (isBusinessOwner || shortTermPropertyExcess || hasSameCreditorDamboAndCredit || hasHfcMortgage || targetDebt <= 4000) {
+                Log.d("HWP_CALC", "회→유 변환 체크: label=$label, 사업자=$isBusinessOwner, 재산초과=$shortTermPropertyExcess, 집경매=$shortTermHomeAuctionRisk(reason=$shortTermBlockReason), 동일채권=$hasSameCreditorDamboAndCredit, 주택금융=$hasHfcMortgage, 소액=${targetDebt <= 4000}")
+                if (isBusinessOwner || shortTermPropertyExcess || shortTermHomeAuctionRisk || hasSameCreditorDamboAndCredit || hasHfcMortgage || targetDebt <= 4000) {
                     label = label.replace("신회워", "신유워").replace("프회워", "프유워")
                 }
             }
@@ -5809,7 +5824,8 @@ class MainActivity : AppCompatActivity() {
         // 진단 라벨이 "회"로 끝나면 (예: 프유회, 신유회, 워유회) 장기 표기를 단기 기준으로 (단기monthly / 단기개월/12+1년)
         val labelEndsWithHoe = longTermDiagLabel.endsWith("회")
         val overrideMonthly = if (labelEndsWithHoe && shortTermMonthly > 0) shortTermMonthly else 0
-        val overrideYear = if (labelEndsWithHoe && shortTermMonths > 0) shortTermMonths / 12 + 1 else 0
+        // 8개월 기준 반올림 ((개월+3)/12: 나머지 9개월 이상 올림, 8개월 이하 내림)
+        val overrideYear = if (labelEndsWithHoe && shortTermMonths > 0) maxOf(1, (shortTermMonths + 3) / 12) else 0
         // 장기 불가 사유 수집
         val longTermBlockReasons = mutableListOf<String>()
         if (longTermDebtOverLimit) {
@@ -5985,13 +6001,14 @@ class MainActivity : AppCompatActivity() {
             diagnosis = diagnosis.replace("새새", "새")
         }
 
-        // 중간 회→유 변환: 사업자, 단순재산초과, 한국주택금융공사 집담보, 동일 채권사가 담보+신용 보유, 또는 대상채무 4000만 이하
+        // 중간 회→유 변환: 사업자, 단순재산초과, 집경매 위험, 한국주택금융공사 집담보, 동일 채권사가 담보+신용 보유, 또는 대상채무 4000만 이하
         val hasSameCreditorDamboAndCredit = parsedDamboCreditorNames.any { it in parsedCreditorMap }
-        if (canDeferment && (isBusinessOwner || shortTermPropertyExcess || hasSameCreditorDamboAndCredit || hasHfcMortgage || targetDebt <= 4000)) {
+        if (canDeferment && (isBusinessOwner || shortTermPropertyExcess || shortTermHomeAuctionRisk || hasSameCreditorDamboAndCredit || hasHfcMortgage || targetDebt <= 4000)) {
             if (diagnosis.contains("신회워") || diagnosis.contains("프회워")) {
                 diagnosis = diagnosis.replace("신회워", "신유워").replace("프회워", "프유워")
                 val reason = when {
                     shortTermPropertyExcess -> "단순재산초과"
+                    shortTermHomeAuctionRisk -> "집경매 위험"
                     isBusinessOwner -> "사업자"
                     hasHfcMortgage -> "한국주택금융공사"
                     targetDebt <= 4000 -> "소액(${targetDebt}만)"
@@ -6024,11 +6041,15 @@ class MainActivity : AppCompatActivity() {
         // 장기 라벨이 최종 진단과 불일치하면 동기화
         // 새새/새/회새는 새출발 진단이고, 단기성 진단도 장기 라벨과 다른 계열이므로 장기 원래 라벨 유지
         val standardLongTermDiags = setOf("신회워", "신유워", "프회워", "프유워", "회워", "워유워", "워회워")
-        if (diagnosis in standardLongTermDiags && longTermDiagLabel.isNotEmpty() && longTermDiagLabel != diagnosis) {
-            var updatedText = longTermText.toString().replace(" / $longTermDiagLabel", " / $diagnosis")
+        // 진단 core: ", 실효…/, 수임…" 및 " 2026.. 이후 가능" 등 접미사 제거한 앞 라벨
+        val diagnosisCore = diagnosis.substringBefore(",").substringBefore(" ").trim()
+        // 6개월30%↑ 앞글자 제거(신유워→유워) / 회생 날짜대기(신유회 등)도 장기 최종 라벨로 인정
+        val ltCoreLabels = standardLongTermDiags + setOf("유워", "유회", "신유회", "프유회", "워유회")
+        var effLtLabel = longTermDiagLabel
+        if (diagnosisCore in ltCoreLabels && longTermDiagLabel.isNotEmpty() && longTermDiagLabel != diagnosisCore) {
+            var updatedText = longTermText.toString().replace(" / $longTermDiagLabel", " / $diagnosisCore")
             // 라벨 회끝(단기 회생 표기) → 비회끝 동기화: 단기 override 금액/기간 → 장기 finalMonthly/finalYear 로 복원
-            // (라벨 회끝이면 line 5727-5728 에서 shortTermMonthly/shortTermMonths 로 override 되었음)
-            if (longTermDiagLabel.endsWith("회") && !diagnosis.endsWith("회") && finalMonthly > 0 && finalYear > 0) {
+            if (longTermDiagLabel.endsWith("회") && !diagnosisCore.endsWith("회") && finalMonthly > 0 && finalYear > 0) {
                 val longPeriodStr = if (longTermUseMonths && longTermDisplayMonths > 0) "${longTermDisplayMonths}개월납" else "${finalYear}년납"
                 updatedText = updatedText.replace(
                     Regex("\\[장기\\] \\d+만 / \\d+(?:년|개월)납"),
@@ -6037,7 +6058,8 @@ class MainActivity : AppCompatActivity() {
             }
             longTermText.clear()
             longTermText.append(updatedText)
-            Log.d("HWP_CALC", "장기라벨 동기화: $longTermDiagLabel → $diagnosis")
+            effLtLabel = diagnosisCore
+            Log.d("HWP_CALC", "장기라벨 동기화: $longTermDiagLabel → $diagnosisCore (진단=$diagnosis)")
         }
 
         // 회워 진단 → 10%탕감(90%)으로 재조정 (기본 15%탕감보다 낮음)
@@ -6070,7 +6092,7 @@ class MainActivity : AppCompatActivity() {
         }
         // 회워 진단 시 납부회수 표기 (2/3/4개월 이내 채무 기반)
         // 단, 6개월 비율이 30% 미만이면 회생 바로 가능 상태이므로 납부 후 표기 불필요
-        var adjustedLtLabel = if (diagnosis in standardLongTermDiags && longTermDiagLabel.isNotEmpty() && longTermDiagLabel != diagnosis) diagnosis else longTermDiagLabel
+        var adjustedLtLabel = effLtLabel
         if (diagnosis.contains("회워") && recentDebtRatio >= 30) {
             // 각 조건마다: 해당 bucket에 속한 채무 중 가장 오래된 채무의 채권발생일 + result개월
             // → 그 중 가장 뒷 날짜를 X월까지 납부 후 회워로 표기 (헬퍼 함수)
@@ -6098,9 +6120,9 @@ class MainActivity : AppCompatActivity() {
                     val ltText = longTermText.toString()
                     if (!afterCal.after(hoeCal)) {
                         // 이후 가능 날짜가 회워 deadline과 같거나 더 빠름 → 회생 path가 자동으로 우선, 납부 후 회워 표기 불필요
-                        if (longTermDiagLabel.isNotEmpty() && ltText.contains(" / $longTermDiagLabel")) {
+                        if (effLtLabel.isNotEmpty() && ltText.contains(" / $effLtLabel")) {
                             longTermText.clear()
-                            longTermText.append(ltText.replace(" / $longTermDiagLabel", " / $afterLabel"))
+                            longTermText.append(ltText.replace(" / $effLtLabel", " / $afterLabel"))
                         }
                         adjustedLtLabel = afterLabel
                         // 이후 가능만 표기 (납부 후 회워 제거: 이후 가능 날짜에 회생이 풀리므로 납부 안내 불필요)
@@ -6109,9 +6131,9 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         // 회워가 더 빠름 → 납부 후 적용이므로 항상 "회워"
                         val hoeLabel = "회워"
-                        if (longTermDiagLabel.isNotEmpty() && ltText.contains(" / $longTermDiagLabel")) {
+                        if (effLtLabel.isNotEmpty() && ltText.contains(" / $effLtLabel")) {
                             longTermText.clear()
-                            longTermText.append(ltText.replace(" / $longTermDiagLabel", " / $hoeLabel"))
+                            longTermText.append(ltText.replace(" / $effLtLabel", " / $hoeLabel"))
                         }
                         adjustedLtLabel = hoeLabel
                         Log.d("HWP_CALC", "납부 후 회워가 더 빠름 → 장기 라벨: $hoeLabel")
@@ -6140,7 +6162,8 @@ class MainActivity : AppCompatActivity() {
                     if (baseDiag.startsWith("워유워")) baseDiag = baseDiag.removePrefix("워유")
                     else if (baseDiag.startsWith("유")) baseDiag = baseDiag.removePrefix("유")
                     val replacement = when {
-                        aiDefermentMonths >= 12 -> "($ongoingProcessName)유$baseDiag"
+                        // 유예 12개월 이상: (신유)워 — 진단(diagnosis)과 동일 형태로 통일
+                        aiDefermentMonths >= 12 -> "(${ongoingProcessName}유)$baseDiag"
                         aiDefermentMonths > 0 -> "($ongoingProcessName)유$baseDiag"
                         else -> "$ongoingPrefix$baseDiag"
                     }
@@ -6175,7 +6198,8 @@ class MainActivity : AppCompatActivity() {
             parentCount = parentCount, hasWolse = hasWolse, parsedDamboTotal = parsedDamboTotal,
             hasOngoingProcess = hasOngoingProcess, ongoingProcessName = ongoingProcessName,
             saeExcludedDebtMan = saeExcludedDebtMan,
-            ownRealEstateCount = ownRealEstateCount
+            ownRealEstateCount = ownRealEstateCount,
+            shortTermMonthlyForClient = shortTermMonthly, shortTermMonthsForClient = shortTermMonths
         )
     }
 
@@ -6355,8 +6379,8 @@ class MainActivity : AppCompatActivity() {
         var useMonths = false
         var displayMonths = 0
         if (finalMonthsVal % 12 != 0) {
-            // 년 단위 반올림 (6개월 이상 → 올림, 미만 → 내림)
-            finalYear = if (finalMonthsVal % 12 >= 6) finalYear + 1 else finalYear
+            // 년 단위 반올림 (8개월 기준: 나머지 9개월 이상 → 올림, 8개월 이하 → 내림)
+            finalYear = if (finalMonthsVal % 12 >= 9) finalYear + 1 else finalYear
             if (finalYear < 1) finalYear = 1
         }
 
@@ -6412,7 +6436,8 @@ class MainActivity : AppCompatActivity() {
             }
             if (finalMonthly <= 0) finalMonthly = conservativeMonthly
             val rawMonths = totalPayment / finalMonthly
-            finalYear = if (rawMonths % 12 >= 6) rawMonths / 12 + 1 else rawMonths / 12
+            // 8개월 기준 반올림 (나머지 9개월 이상 → 올림, 8개월 이하 → 내림)
+            finalYear = if (rawMonths % 12 >= 9) rawMonths / 12 + 1 else rawMonths / 12
             if (finalYear < 1) finalYear = 1
             finalMonthly = totalPayment / (finalYear * 12)
             if (finalMonthly < minMonthly) {
@@ -6492,7 +6517,8 @@ class MainActivity : AppCompatActivity() {
         livingCostTable: IntArray, householdForShinbok: Int, parentCount: Int, hasWolse: Boolean, parsedDamboTotal: Int,
         hasOngoingProcess: Boolean = false, ongoingProcessName: String = "",
         saeExcludedDebtMan: Int = 0,
-        ownRealEstateCount: Int = 0
+        ownRealEstateCount: Int = 0,
+        shortTermMonthlyForClient: Int = 0, shortTermMonthsForClient: Int = 0
     ) {
         val maxYears = maxMonths / 12
 
@@ -6580,14 +6606,15 @@ class MainActivity : AppCompatActivity() {
                 val clientMonthlyForDisplay = if (clientUseMonths && clientDisplayMonths > maxMonths && dispMonths > 0) {
                     Math.ceil(totalPayment.toDouble() / maxMonths).toInt()
                 } else clientFinalMonthly
-                val clientPeriodStr = if (clientUseMonths) "${dispMonths}개월납" else "${clientFinalYear}년납"
-                val clientLtLabel = if (hasOngoingProcess && ongoingProcessName.isNotEmpty() && longTermDiagLabel.isNotEmpty() && !longTermDiagLabel.startsWith("(")) {
-                    // 회생 진행중이면 회 prefix 중복 제거 (회워 → 워)
-                    val baseLabel = if (ongoingProcessName == "회" && longTermDiagLabel.startsWith("회") && !longTermDiagLabel.startsWith("회새")) longTermDiagLabel.substring(1) else longTermDiagLabel
-                    "($ongoingProcessName)$baseLabel"
-                } else longTermDiagLabel
+                // 거래처 라벨은 본체 [장기] 라벨과 동일하게 재사용 (진행중/유예 prefix 본체 로직 그대로 → [진단]·본체와 불일치 방지)
+                val clientLtLabel = if (longTermDiagLabel.isEmpty()) "" else legoFirstLine.substringAfterLast(" / ", longTermDiagLabel)
+                // 진행중 회생 추천((프유)회 등) → 거래처 [장기]도 회생(단기) 기준 금액 ([진단]과 일치)
+                val clientLabelEndsWithHoe = clientLtLabel.endsWith("회")
+                val clientDispMonthly = if (clientLabelEndsWithHoe && shortTermMonthlyForClient > 0) shortTermMonthlyForClient else clientMonthlyForDisplay
+                val clientPeriodStr = if (clientLabelEndsWithHoe && shortTermMonthsForClient > 0) "${maxOf(1, (shortTermMonthsForClient + 3) / 12)}년납"
+                    else if (clientUseMonths) "${dispMonths}개월납" else "${clientFinalYear}년납"
                 val clientDiagSuffix = if (clientLtLabel.isNotEmpty()) " / $clientLtLabel" else ""
-                clientLongTermText.append("[장기] ${clientMonthlyForDisplay}만 / $clientPeriodStr$studentLoanLongSuffix$clientDiagSuffix")
+                clientLongTermText.append("[장기] ${clientDispMonthly}만 / $clientPeriodStr$studentLoanLongSuffix$clientDiagSuffix")
             } else {
                 clientLongTermText.append(legoFirstLine)
             }
