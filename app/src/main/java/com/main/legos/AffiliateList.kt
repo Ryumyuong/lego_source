@@ -172,6 +172,7 @@ object AffiliateList {
         if (normalizedName.contains("신협") || koreanName.contains("신협")) return true
         if (normalizedName.contains("농협") || koreanName.contains("농협") || normalizedName.contains("농업협동조합") || koreanName.contains("농업협동조합")) return true
         if (normalizedName.contains("수협") || koreanName.contains("수협")) return true
+        if (normalizedName.contains("산림조합") || koreanName.contains("산림조합")) return true
         if (normalizedName.contains("대구은행") || koreanName.contains("대구은행")) return true
         if (normalizedName.contains("상호") || koreanName.contains("상호")) return true
 

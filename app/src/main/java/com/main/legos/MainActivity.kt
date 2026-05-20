@@ -1689,6 +1689,7 @@ class MainActivity : AppCompatActivity() {
         var collegeChildren = 0
         var parentCount = 0
         var hasSpouse = false
+        var spouseHasIncome = false  // 배우자 소득 있음 (단기 회생 생계비 미성년 절반 적용)
         var isDivorced = false
         var delinquentDays = 0
         var actualDelinquentDays = 0  // 실제 연체일수 (다른 단계 진행으로 인한 1095일 제외)
@@ -2179,7 +2180,7 @@ class MainActivity : AppCompatActivity() {
                             } else {
                                 parsedPropertyTotal += rawNet
                                 if (isJilgwonXProperty) {
-                                    Log.d("HWP_PARSE", "지역 본인명의 재산 (질권x): ${siseAmt}만 전액 재산, 대출${loanAmt}만 → 대상채무")
+                                    Log.d("HWP_PARSE", "지역 본인명의 재산 (질권x): ${siseAmt}만 전액 재산, 대출${loanAmt}만 → 대상채무(채무표에서 합산)")
                                 } else {
                                     Log.d("HWP_PARSE", "지역 본인명의 재산: 시세${siseAmt}만 - 대출${loanAmt}만 = ${rawNet}만")
                                 }
@@ -2301,7 +2302,7 @@ class MainActivity : AppCompatActivity() {
                         val siseAmt = rawSise
                             ?: bojungAmt.takeIf { it > 0 }
                             ?: extractAmount(g)
-                        // 본인명의 대출 + 배우자명의 대출 각각 추출
+                        // 본인명의 대출 + 배우자명의 대출 각각 추출 (한 부동산에 여러 대출 합산)
                         var loanAmt = if (gNoSpace.contains("본인명의") && gNoSpace.contains("배우자명의")) {
                             val ownLoan = extractAmountAfterKeyword(g, "본인명의 대출").takeIf { it > 0 }
                                 ?: extractAmountAfterKeyword(g, "본인명의대출")
@@ -2309,7 +2310,7 @@ class MainActivity : AppCompatActivity() {
                                 ?: extractAmountAfterKeyword(g, "배우자명의대출")
                             ownLoan + spouseLoan
                         } else {
-                            extractAmountAfterKeyword(g, "대출")
+                            extractAllAmountsAfterKeyword(g, "대출")
                         }
                         val seipjaAmt = extractAmountAfterKeyword(g, "세입자")
                         // 시세가 있으면 보증금 차감, 보증금만 있으면 보증금이 재산가치 (세입자 있으면 중복차감 방지)
@@ -2494,6 +2495,16 @@ class MainActivity : AppCompatActivity() {
                 if (valNoSpace.equals("x", ignoreCase = true) || valNoSpace.equals("없음") || valNoSpace.equals("미가입")) {
                     noSocialInsurance = true
                     Log.d("HWP_PARSE", "사대보험 X → 소득*0.8 적용: $line")
+                }
+            }
+
+            // 배우자 소득 감지: "배우자소득 월 250만" 등 (금액 > 0 필요)
+            if (lineNoSpace.contains("배우자") && lineNoSpace.contains("소득") && !lineNoSpace.contains("모르게")) {
+                val spouseIncomeMatch = Regex("(\\d+)\\s*만").find(line)
+                val amt = spouseIncomeMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                if (amt > 0) {
+                    spouseHasIncome = true
+                    Log.d("HWP_PARSE", "배우자 소득 감지: ${amt}만 (단기 회생 미성년 절반 적용)")
                 }
             }
 
@@ -3361,6 +3372,8 @@ class MainActivity : AppCompatActivity() {
             val dateMatcher3 = Pattern.compile("(\\d{2})년\\s*(\\d{1,2})월").matcher(line)
             val dateMatcher4 = Pattern.compile("^(\\d{2})년\\s+").matcher(line)
             val dateMatcher5 = Pattern.compile("(?<!\\d)(20\\d{2})[.\\-](\\d{1,2})(?!\\d)").matcher(line)
+            val dateMatcher5b = Pattern.compile("(?<!\\d)(\\d{2})[.\\-](\\d{1,2})(?!\\d)").matcher(line) // 25.12 또는 25.12. 형식 (YY.MM, 일 없음)
+            val dateMatcher5c = Pattern.compile("(?<=\\s)(\\d{2})\\.?(?=\\s|$)").matcher(line) // 25 또는 25. 형식 (YY 단독, 표 셀 공백 구분)
             val dateMatcher6 = Pattern.compile("(?<!\\d)(20\\d{2})(?!\\d)").matcher(line)
 
             // 날짜 칸이 "?"인 경우 → 날짜 없음 유지 (loanYear=0), 채무금액은 정상 파싱되어 총채무에 포함, 6개월 수집은 자동 스킵
@@ -3381,6 +3394,22 @@ class MainActivity : AppCompatActivity() {
                     loanYear = 2000 + dateMatcher4.group(1)!!.toInt(); loanMonth = 1; loanDay = 1
                 } else if (dateMatcher5.find()) {
                     loanYear = dateMatcher5.group(1)!!.toInt(); loanMonth = dateMatcher5.group(2)!!.toInt(); loanDay = 1
+                } else if (dateMatcher5b.find()) {
+                    val yy = dateMatcher5b.group(1)!!.toInt(); val mm = dateMatcher5b.group(2)!!.toInt()
+                    // 채무표 발생일자(YY.MM) 한정: 연도 20~30, 월 1~12 (오탐 방지)
+                    if (yy in 20..30 && mm in 1..12) {
+                        loanYear = 2000 + yy; loanMonth = mm; loanDay = 1
+                    } else if (dateMatcher6.find()) {
+                        loanYear = dateMatcher6.group(1)!!.toInt(); loanMonth = 1; loanDay = 1
+                    }
+                } else if (dateMatcher5c.find()) {
+                    val yy = dateMatcher5c.group(1)!!.toInt()
+                    // 채무표 발생일자(YY 단독) 한정: 연도 20~30 (오탐 방지)
+                    if (yy in 20..30) {
+                        loanYear = 2000 + yy; loanMonth = 1; loanDay = 1
+                    } else if (dateMatcher6.find()) {
+                        loanYear = dateMatcher6.group(1)!!.toInt(); loanMonth = 1; loanDay = 1
+                    }
                 } else if (dateMatcher6.find()) {
                     loanYear = dateMatcher6.group(1)!!.toInt(); loanMonth = 1; loanDay = 1
                 }
@@ -4538,7 +4567,12 @@ class MainActivity : AppCompatActivity() {
         // 최저생계비 (2026년)
         val livingCostTable = intArrayOf(0, 154, 252, 322, 390, 453, 513)
         // 단기(회생): 배우자 모르게이면 미성년 자녀 절반만 인정 (1.5명 → 1명, floor)
-        val effectiveMinorForHoeseng = if (spouseSecret) minorChildren / 2 else minorChildren
+        // 기혼+배우자 소득 있으면 미성년 절반 (1.5명 → 2명, ceiling)
+        val effectiveMinorForHoeseng = when {
+            spouseSecret -> minorChildren / 2
+            hasSpouse && spouseHasIncome -> (minorChildren + 1) / 2
+            else -> minorChildren
+        }
         val householdForHoeseng = minOf(1 + effectiveMinorForHoeseng, 6)
         val livingCostHoeseng = livingCostTable[householdForHoeseng]
         val householdForShinbok = minOf(1 + minorChildren + collegeChildren, 6)
