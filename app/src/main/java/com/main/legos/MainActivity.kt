@@ -774,10 +774,16 @@ class MainActivity : AppCompatActivity() {
 - creditors: 각 채권금융회사명 + 구분="전" 행의 "원금". 같은 채권사는 합산
 
 [3] "■ 개인채무조정에서 제외된 채무내역" 또는 "■ 제외채무 내역" 테이블 ← 반드시 찾으세요!
-- 이 테이블은 "채무별 조정내역"과 별도 페이지에 있음 (보통 후반부)
+- 이 테이블은 "채무별 조정내역"과 별도 페이지에 있음 (보통 후반부 또는 초반 안내 페이지)
 - "■ 개인채무조정에서 제외된 채무내역" 또는 "■ 제외채무 내역"이라는 ■ 마크가 있는 제목 아래에 있음
 - 컬럼: 채권금융회사 | 대출과목 | 계좌번호 | 원금 | 이자 | 비용 | 제외사유
 - 제외사유 예시: "개별상환(보증서 담보대출)", "개별상환(자동차 담보대출)", "소액 채무", "새출발기금 매입예정"
+- ★★★ 중요: 모든 페이지를 위→아래로 꼼꼼히 스캔할 것. 제목만 보고 "해당사항 없음"으로 단정 짓지 말 것
+  - 제목 바로 아래 "해당사항 없음" 텍스트만 있고 표 자체가 없으면 빈 배열로 반환
+  - 그러나 표(컬럼 헤더+행)가 보이면 표 안의 모든 행을 반드시 추출 (행 내용이 부분적으로 비어있어도 포함)
+  - 채권금융회사명에 '카드/은행/캐피탈/저축/대부/공사/재단' 등 단어가 있는 행은 반드시 데이터로 인식
+  - 단서: 제목 아래에 "○ 제외사유를 확인하시고..." 같은 안내 문구가 있으면 그 아래에 반드시 데이터 표가 있다는 뜻이므로 더욱 꼼꼼히 확인할 것
+  - 실제 행 예시: "(주)카카오뱅크 | 햇살론15 | 0003650043730198 | 6,268,121 | 26,694 | 0 | 개별상환(보증서 담보대출)" → 이런 형태의 행이 단 1줄이라도 보이면 반드시 추출
 - ★ 단위 주의: 표 상단/하단의 "(단위: 원)" / "(단위: 천원)" / "(단위: 만원)" 표기를 반드시 확인.
   - 단위가 천원이면 → 표시값 × 1000 으로 변환 (예: 표에 "8,700" + 단위 천원 → 8700000원)
   - 단위가 만원이면 → 표시값 × 10000 으로 변환 (예: 표에 "870" + 단위 만원 → 8700000원)
@@ -899,16 +905,19 @@ class MainActivity : AppCompatActivity() {
                         Log.d("FILE_PROCESS", "새출발기금 매입예정 채권사 등록(금액은 totalPrincipal에 포함): ${cPrincipal}만 ($cName, 사유=$reason)")
                         continue
                     }
-                    // 보증서담보대출: 분류 정보만 (totalPrincipal에 이미 포함), 차량/주택/기타 담보 → 담보
+                    // 차량/주택/할부담보 → 담보채무 (대상채무 제외, totalPrincipal에서 빠짐)
+                    // 보증서담보/지급보증 → 신용채무 (대상채무 포함, excludedGuaranteeTotal로 누적)
                     val isDamboType = reason.contains("차량") || reason.contains("자동차") || reason.contains("주택") || reason.contains("할부") || reason.contains("신용보험")
                     val isGuarantee = !isDamboType && (reason.contains("보증서") || reason.contains("지급보증"))
-                    if (!isGuarantee) {
+                    if (isGuarantee) {
+                        excludedGuaranteeTotal += cPrincipal
+                    } else {
                         excludedDamboTotal += cPrincipal
                         if (cName.length >= 2) pdfExcludedDamboCreditors.add(cName)
                     }
                     // 제외 목록에 저장 (대출과목 "제외N" 인덱스 매칭용)
                     pdfExcludedEntries.add(PdfExcludedEntry(i + 1, cName, cPrincipal, reason, isDamboType))
-                    Log.d("FILE_PROCESS", "제외 채무: 행${i+1} ${cPrincipal}만 (사유=$reason, 보증서=${isGuarantee}${if (isGuarantee) ", 금액추가안함" else ""})")
+                    Log.d("FILE_PROCESS", "제외 채무: 행${i+1} ${cPrincipal}만 (사유=$reason, 보증서=${isGuarantee}${if (isGuarantee) ", 대상채무에 포함" else ", 담보로 제외"})")
                 }
             }
         }
@@ -951,14 +960,26 @@ class MainActivity : AppCompatActivity() {
                 val batch = pageBatches[retryNum - 1]
                 val excludedPrompt = """이 이미지들은 채무조정 체결합의서 PDF의 일부 페이지(${batch.size}장)입니다.
 
-"■ 개인채무조정에서 제외된 채무내역" 또는 "■ 제외채무 내역"이라는 ■ 마크가 있는 제목의 테이블을 찾으세요.
-이 테이블은 "채무별 조정내역"과는 다른 별도 테이블입니다.
+★★★ 임무: 이 페이지들에서 "■ 개인채무조정에서 제외된 채무내역" 또는 "■ 제외채무 내역" 제목의 테이블을 찾아 모든 행을 추출하세요.
+
+★★★ 스캔 절차 (반드시 이 순서로):
+1단계: 각 페이지를 위→아래로 훑으며 ■ 마크가 있는 모든 섹션 제목을 나열
+2단계: "제외된 채무내역" / "제외채무" 라는 단어가 포함된 제목을 찾기
+3단계: 그 제목 아래에 표(컬럼 헤더 + 데이터 행)가 있는지 확인
+4단계: 표가 있으면 모든 행을 한 줄씩 읽어내려가며 추출 (행 누락 절대 금지)
+
+★★★ "해당사항 없음" 판단 기준 (오인 주의):
+- 표 헤더 자체가 없고 제목 바로 아래 "해당사항 없음" 텍스트만 있으면 → 빈 배열 OK
+- 그러나 컬럼 헤더(채권금융회사/대출과목/원금/제외사유 등)가 보이고 그 아래 행이 하나라도 있으면 → 반드시 추출
+- 채권사명(예: 카드/은행/캐피탈/저축은행/대부/공사)이 보이는 행은 무조건 추출
+- 단서: 제목 아래 "○ 제외사유를 확인하시고..." 안내 문구가 있으면 그 아래에 반드시 데이터가 있다는 뜻
+- 실제 행 예시: "(주)카카오뱅크 | 햇살론15 | 0003650043730198 | 6,268,121 | 26,694 | 0 | 개별상환(보증서 담보대출)" → 이런 형태의 행이 단 1줄이라도 보이면 반드시 추출
 
 이 테이블의 컬럼: 채권금융회사 | 대출과목 | 계좌번호 | 원금 | 이자 | 비용 | 제외사유
-제외사유 예시: "개별상환(보증서 담보대출)", "개별상환(자동차 담보대출)", "소액 채무", "새출발기금 매입예정"
+제외사유 예시: "개별상환(보증서 담보대출)", "개별상환(자동차 담보대출)", "소액 채무", "새출발기금 매입예정", "완제"
 
 각 행에서 추출:
-- ★★★ 표의 모든 행을 위에서 아래 순서대로 빠짐없이 추출 (제외사유가 "완제"인 행도 반드시 포함, 절대 건너뛰지 말 것)
+- ★★★ 표의 모든 행을 위에서 아래 순서대로 빠짐없이 추출 (제외사유가 "완제"인 행도 반드시 포함)
 - ★★★ 원금이 0이거나 비어있어도 행을 빠뜨리지 말 것 (행 인덱스 일치가 중요)
 - name: 채권금융회사명
 - principal: 원금 (원 단위 숫자, 빈 칸이면 0)
@@ -969,7 +990,7 @@ class MainActivity : AppCompatActivity() {
   "완제" 포함 → "완제" (그대로),
   그 외 → 제외사유 값 그대로
 
-테이블이 없으면 빈 배열을 응답하세요.
+표 헤더 자체가 정말 없거나 "해당사항 없음"만 있으면 빈 배열.
 반드시 JSON만 응답 (마크다운 코드블록 없이):
 {"excludedCreditors": [{"name": "채권사명", "principal": 숫자, "reason": "사유"}]}"""
 
@@ -1008,15 +1029,19 @@ class MainActivity : AppCompatActivity() {
                                 Log.d("FILE_PROCESS", "새출발기금 매입예정 채권사 등록(${retryNum}차, 금액은 totalPrincipal에 포함): ${cPrincipal}만 ($cName, 사유=$reason)")
                                 continue
                             }
+                            // 차량/주택/할부담보 → 담보채무 (대상채무 제외)
+                            // 보증서담보/지급보증 → 신용채무 (대상채무 포함, excludedGuaranteeTotal로 누적)
                             val isDamboType = reason.contains("차량") || reason.contains("자동차") || reason.contains("주택") || reason.contains("할부")
                             val isGuarantee = !isDamboType && (reason.contains("보증서") || reason.contains("지급보증"))
-                            if (!isGuarantee) {
+                            if (isGuarantee) {
+                                excludedGuaranteeTotal += cPrincipal
+                            } else {
                                 excludedDamboTotal += cPrincipal
                                 if (cName.length >= 2) pdfExcludedDamboCreditors.add(cName)
                             }
                             // 제외 목록에 저장 (대출과목 "제외N" 인덱스 매칭용)
                             pdfExcludedEntries.add(PdfExcludedEntry(i + 1, cName, cPrincipal, reason, isDamboType))
-                            Log.d("FILE_PROCESS", "제외 채무(${retryNum}차): 행${i+1} ${cPrincipal}만 (사유=$reason, 보증서=${isGuarantee}${if (isGuarantee) ", 금액추가안함" else ""})")
+                            Log.d("FILE_PROCESS", "제외 채무(${retryNum}차): 행${i+1} ${cPrincipal}만 (사유=$reason, 보증서=${isGuarantee}${if (isGuarantee) ", 대상채무에 포함" else ", 담보로 제외"})")
                         }
                     }
                     pdfExcludedGuaranteeDebt = excludedGuaranteeTotal
@@ -2104,12 +2129,12 @@ class MainActivity : AppCompatActivity() {
                         if (!lineNoSpace.contains("월세")) {
                             regionIsSpouseOwned = true
                         }
-                        // 지역 배우자명의 시세/대출 파싱 → ÷2 (시세 없으면 보증금=시세)
-                        val siseMatch = Pattern.compile("시세\\s*(\\d+억?\\s*\\d*천?\\s*\\d*만?)").matcher(line)
-                        val loanMatch = Pattern.compile("대출\\s*(\\d+억?\\s*\\d*천?\\s*\\d*만?)").matcher(line)
-                        val bojungMatch = Pattern.compile("보증금\\s*(\\d+억?\\s*\\d*천?\\s*\\d*만?)").matcher(line)
-                        val regionSise = if (siseMatch.find()) extractAmount(siseMatch.group(1)!!) else if (bojungMatch.find()) extractAmount(bojungMatch.group(1)!!) else 0
-                        val regionLoan = if (loanMatch.find()) extractAmount(loanMatch.group(1)!!) else 0
+                        // 지역 배우자명의 시세/공시지가/실거래/보증금/대출 파싱 → ÷2
+                        val regionSise = extractAmountAfterKeyword(line, "시세").takeIf { it > 0 }
+                            ?: extractAmountAfterKeyword(line, "공시지가").takeIf { it > 0 }
+                            ?: extractAmountAfterKeyword(line, "실거래").takeIf { it > 0 }
+                            ?: extractAmountAfterKeyword(line, "보증금")
+                        val regionLoan = extractAllAmountsAfterKeyword(line, "대출")
                         regionSpouseProperty = maxOf((regionSise - regionLoan) / 2, 0)
                         Log.d("HWP_PARSE", "지역 배우자명의 감지: 시세${regionSise}만 - 대출${regionLoan}만 → ÷2 = ${regionSpouseProperty}만")
                     }
@@ -3134,11 +3159,16 @@ class MainActivity : AppCompatActivity() {
                     for (seg in debtAdjSegments) {
                         val segNoSpace = seg.replace("\\s+".toRegex(), "")
                         // 면책 감지 (파산만 적혀있어도 파산 면책으로 인식)
+                        // 단, "워크/신복 면책"은 워크아웃 완료를 뜻하므로 5년 면책 제한 대상 아님 (회생/파산 면책만 제한)
                         val hasDischargeKeyword = seg.contains("면책") || seg.contains("면채")
+                        val isWorkoutOnlyDischarge = hasDischargeKeyword &&
+                            (seg.contains("워크") || seg.contains("신복") || seg.contains("신용회복")) &&
+                            !seg.contains("회생") && !seg.contains("파산")
+                        val effectiveDischargeKeyword = hasDischargeKeyword && !isWorkoutOnlyDischarge
                         val isStandalonePasan = seg.contains("파산") && !hasDischargeKeyword &&
                             !seg.contains("폐지") && !seg.contains("기각") && !seg.contains("취하") &&
                             !seg.contains("진행") && !seg.contains("접수") && !seg.contains("신청")
-                        if (hasDischargeKeyword || isStandalonePasan) {
+                        if (effectiveDischargeKeyword || isStandalonePasan) {
                             hasDischarge = true
                             var segYear = 0; var segMonth = 0
                             var m = Pattern.compile("(\\d{2})년도?\\s*(\\d{1,2})월?").matcher(seg)
@@ -4953,7 +4983,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 장기(신복위) 보수 + 공격 + 최종 계산 (공통 함수 사용)
-        val ltResult = calcLongTermValues(
+        var ltResult = calcLongTermValues(
             totalPayment, targetDebt, longTermIncome, livingCostShinbok, livingCostTable, parentDeduction,
             householdForShinbok, parentCount, (isFreelancer || noSocialInsurance), longTermIsFullPayment,
             hasWolse, parsedDamboTotal,
@@ -4962,6 +4992,22 @@ class MainActivity : AppCompatActivity() {
             majorCreditorRatio, shortTermTotal,
             minMonthly = 40, maxMonths = 120
         )
+        // 프리랜서 + 최종 8년 + 월변제금이 비프리랜서 기준보다 높으면 → 비프리랜서로 재계산
+        if (isFreelancer && ltResult.finalYear == 8 && ltResult.finalMonthly > 0) {
+            val nonFreelancerResult = calcLongTermValues(
+                totalPayment, targetDebt, longTermIncome, livingCostShinbok, livingCostTable, parentDeduction,
+                householdForShinbok, parentCount, false, longTermIsFullPayment,
+                hasWolse, parsedDamboTotal,
+                hasAuction, hasSeizure, hasGambling, hasStock, hasCrypto,
+                recentDebtRatio, delinquentDays, hasOwnRealEstate,
+                majorCreditorRatio, shortTermTotal,
+                minMonthly = 40, maxMonths = 120
+            )
+            if (nonFreelancerResult.finalMonthly in 1 until ltResult.finalMonthly) {
+                Log.d("HWP_CALC", "프리랜서 8년 ${ltResult.finalMonthly}만 > 비프리랜서 ${nonFreelancerResult.finalMonthly}만 → 비프리랜서 기준 ${nonFreelancerResult.finalYear}년/${nonFreelancerResult.finalMonthly}만 적용")
+                ltResult = nonFreelancerResult
+            }
+        }
         var roundedLongTermMonthly = ltResult.conservativeMonthly
         var longTermYears = ltResult.conservativeYears
         var roundedAggressiveMonthly = ltResult.aggressiveMonthly
@@ -5385,7 +5431,7 @@ class MainActivity : AppCompatActivity() {
             diagnosis = "단순 진행"
         } else if (shortTermDebt in 1..1500) {
             diagnosis = "방생"; diagnosisNote = "(소액)"
-        } else if (income <= 100 && !hasStock && !hasCrypto && !hasGambling && originalNetProperty <= 1000 && (age >= 65 || hasDisability)) {
+        } else if (income <= 100 && !hasStock && !hasCrypto && !hasGambling && originalNetProperty <= 1000 && (age >= 65 || hasDisability) && !dischargeWithin5Years) {
             diagnosis = "파산"
         } else if (hasKamco && !canGetSae) {
             // 한국자산관리공사(캠코) 보유 + 새새 불가 → 회워/워유워/방생
@@ -6572,7 +6618,7 @@ class MainActivity : AppCompatActivity() {
         val maxYears = maxMonths / 12
 
         // 공통 함수로 장기 계산 (본체와 동일 로직, minMonthly/maxMonths만 다름)
-        val ltResult = if (targetDebt > 0 && !longTermFullyBlocked) {
+        var ltResult = if (targetDebt > 0 && !longTermFullyBlocked) {
             calcLongTermValues(
                 totalPayment, targetDebt, income, livingCostShinbok, livingCostTable, parentDeduction,
                 householdForShinbok, parentCount, isFreelancer, longTermIsFullPayment,
@@ -6583,6 +6629,22 @@ class MainActivity : AppCompatActivity() {
                 minMonthly, maxMonths
             )
         } else null
+        // 프리랜서 + 최종 8년 + 월변제금이 비프리랜서 기준보다 높으면 → 비프리랜서로 재계산
+        if (isFreelancer && ltResult != null && ltResult.finalYear == 8 && ltResult.finalMonthly > 0) {
+            val nonFreelancerResult = calcLongTermValues(
+                totalPayment, targetDebt, income, livingCostShinbok, livingCostTable, parentDeduction,
+                householdForShinbok, parentCount, false, longTermIsFullPayment,
+                hasWolse, parsedDamboTotal,
+                hasAuction, hasSeizure, hasGambling, hasStock, hasCrypto,
+                recentDebtRatio, delinquentDays, hasOwnRealEstate,
+                majorCreditorRatio, shortTermTotal,
+                minMonthly, maxMonths
+            )
+            if (nonFreelancerResult.finalMonthly in 1 until ltResult.finalMonthly) {
+                Log.d("HWP_CALC", "거래처 프리랜서 8년 ${ltResult.finalMonthly}만 > 비프리랜서 ${nonFreelancerResult.finalMonthly}만 → 비프리랜서 기준 ${nonFreelancerResult.finalYear}년/${nonFreelancerResult.finalMonthly}만 적용")
+                ltResult = nonFreelancerResult
+            }
+        }
         var clientFinalMonthly = ltResult?.finalMonthly ?: 0
         var clientFinalYear = ltResult?.finalYear ?: 0
         val clientUseMonths = ltResult?.useMonths ?: false
