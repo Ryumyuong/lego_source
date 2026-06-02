@@ -5094,8 +5094,8 @@ class MainActivity : AppCompatActivity() {
             specialNotesList.add("$effectiveMajorCreditor 과반 (${String.format("%.0f", majorCreditorRatio)}%)")
             Log.d("HWP_CALC", "과반 채권사 (AI): $effectiveMajorCreditor ${effectiveMajorDebt}만 / ${originalTargetDebt}만 = ${String.format("%.1f", majorCreditorRatio)}%")
         }
-        // 같은 은행에 신용+담보 동시 보유 → 특이사항
-        for (bankName in parsedDamboCreditorNames.filter { it in parsedCreditorMap }) {
+        // 같은 은행에 신용+담보 동시 보유 → 특이사항 ([] 지점명 무시, 은행명으로 매칭)
+        for (bankName in parsedDamboCreditorNames.filter { it.replace(Regex("\\[.*?\\]"), "").trim() in normalizedCreditorMap }) {
             val cleanName = bankName.replace(Regex("\\[[^\\]]*\\]"), "").replace(Regex("（[^）]*）"), "").replace(Regex("\\([^)]*\\)"), "").trim()
             specialNotesList.add("$cleanName 신용+담보")
             Log.d("HWP_CALC", "신용+담보 동시 보유 채권사: $cleanName")
@@ -5906,7 +5906,7 @@ class MainActivity : AppCompatActivity() {
             }
             // 중간 회→유 변환: 사업자, 단순재산초과, 집경매 위험, 한국주택금융공사 집담보, 동일 채권사가 담보+신용 보유, 또는 대상채무 4000만 이하
             if (canDeferment) {
-                val hasSameCreditorDamboAndCredit = parsedDamboCreditorNames.any { it in parsedCreditorMap }
+                val hasSameCreditorDamboAndCredit = parsedDamboCreditorNames.any { it.replace(Regex("\\[.*?\\]"), "").trim() in normalizedCreditorMap }
                 Log.d("HWP_CALC", "회→유 변환 체크: label=$label, 사업자=$isBusinessOwner, 재산초과=$shortTermPropertyExcess, 집경매=$shortTermHomeAuctionRisk(reason=$shortTermBlockReason), 동일채권=$hasSameCreditorDamboAndCredit, 주택금융=$hasHfcMortgage, 소액=${targetDebt <= 4000}")
                 if (isBusinessOwner || shortTermPropertyExcess || shortTermHomeAuctionRisk || hasSameCreditorDamboAndCredit || hasHfcMortgage || targetDebt <= 4000) {
                     label = label.replace("신회워", "신유워").replace("프회워", "프유워")
@@ -5975,7 +5975,7 @@ class MainActivity : AppCompatActivity() {
         if (canApplySae && saeTotalPayment > 0) {
             val saeBugyeol = netProperty - targetDebt >= 10000 || longTermPropertyExcess || propertyExcessWithGuarantee
             val saeLabel = if (actualDelinquentDays >= 90 || delinquentDays >= 90) "새" else "새새"
-            longTermText.append("\n[새출발] ${saeMonthly}만 / ${saeYears}년납 / $saeLabel${if (saeBugyeol) " (부결고지)" else ""}")
+            longTermText.append("\n[새출발] ${saeMonthly}만 / ${saeYears}년납 / $saeLabel${if (saeBugyeol && saeLabel != "새새") " (부결고지)" else ""}")
         } else if (hasBusinessHistory && isBusinessOwner && saeDebtOverLimit) {
             longTermText.append("\n[새출발] 새새 불가(채무한도초과 담보${formatToEok(totalSecuredDebt)})")
         } else if (hasBusinessHistory && isBusinessOwner && saePropertyExcess) {
@@ -6043,8 +6043,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 다른 단계 진행중이면 진단 앞에 표시 (방생은 제외, 이미 (제도)유회 형태이면 건너뜀)
-        if (hasOngoingProcess && ongoingProcessName.isNotEmpty() && diagnosis != "방생"
+        // 다른 단계 진행중이면 진단 앞에 표시 (방생·파산은 종결성 진단이라 제외, 이미 (제도)유회 형태이면 건너뜀)
+        if (hasOngoingProcess && ongoingProcessName.isNotEmpty() && diagnosis != "방생" && diagnosis != "파산"
             && !diagnosis.startsWith("(${ongoingProcessName})") && !diagnosis.startsWith("(${ongoingProcessName}유)")) {
             // 진행중 제도 prefix가 있으면 진단 앞의 연체 route(신/프/워) 제거 (중복 방지)
             var baseDiag = diagnosis
@@ -6097,7 +6097,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 중간 회→유 변환: 사업자, 단순재산초과, 집경매 위험, 한국주택금융공사 집담보, 동일 채권사가 담보+신용 보유, 또는 대상채무 4000만 이하
-        val hasSameCreditorDamboAndCredit = parsedDamboCreditorNames.any { it in parsedCreditorMap }
+        val hasSameCreditorDamboAndCredit = parsedDamboCreditorNames.any { it.replace(Regex("\\[.*?\\]"), "").trim() in normalizedCreditorMap }
         if (canDeferment && (isBusinessOwner || shortTermPropertyExcess || shortTermHomeAuctionRisk || hasSameCreditorDamboAndCredit || hasHfcMortgage || targetDebt <= 4000)) {
             if (diagnosis.contains("신회워") || diagnosis.contains("프회워")) {
                 diagnosis = diagnosis.replace("신회워", "신유워").replace("프회워", "프유워")
@@ -6119,7 +6119,9 @@ class MainActivity : AppCompatActivity() {
         }
         // 장기(신복위) 불가 조건 통합 → 신복위 제도(워) 들어간 진단 변환
         // longTermDebtOverLimit / nonAffiliatedOver20 / longTermFullyBlocked(재산초과/차량/경매/지급보증/채무부족 등) 모두 포함
-        val longTermBlockedAny = longTermDebtOverLimit || nonAffiliatedOver20 || longTermFullyBlocked
+        // [장기] 라벨이 "장기 불가"로 확정된 경우(대상채무 0 등으로 finalMonthly=0 → 압류 불가 등 longTermFullyBlocked 미포착)도 동기화
+        val longTermLabelBlocked = longTermText.toString().contains("[장기] 장기 불가")
+        val longTermBlockedAny = longTermDebtOverLimit || nonAffiliatedOver20 || longTermFullyBlocked || longTermLabelBlocked
         if (longTermBlockedAny && !isBangsaeng) {
             val standardLabels = setOf("신회워", "신유워", "프회워", "프유워", "회워", "워회워")
             val before = diagnosis
@@ -6184,6 +6186,8 @@ class MainActivity : AppCompatActivity() {
             if (!isClientMode && originalTargetDebt <= 4000 && originalTargetDebt > 0) finalDiagnosis = "$finalDiagnosis, 수임료 오픈"
             val hasSuimOpen = originalTargetDebt in 1..4000
             if (majorCreditorRatio >= 70 && !(isSaeDiagnosis && !hasSuimOpen)) finalDiagnosis = "$finalDiagnosis, 수임 별도"
+            // 신용+담보 동일 채권사 보유 → [진단] 부결고지 (담보권자 동의 불확실, 새새 미표기 규칙의 예외)
+            if (hasSameCreditorDamboAndCredit && diagnosis != "파산") finalDiagnosis = "$finalDiagnosis, 부결고지"
         }
         // 회워 진단 시 납부회수 표기 (2/3/4개월 이내 채무 기반)
         // 단, 6개월 비율이 30% 미만이면 회생 바로 가능 상태이므로 납부 후 표기 불필요
@@ -6269,7 +6273,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
         binding.test2.text = longTermText.toString()
-        if (diagnosis == "새새") finalDiagnosis = "$finalDiagnosis, 부결고지"
         if (hasBunyangGwon) finalDiagnosis = "$finalDiagnosis / 분양권 포기 이후 가능"
         binding.testing.text = "[진단] $finalDiagnosis"
         // 대출과목 테이블 출력 (카드이용금액 + 대출과목 + PDF 제외)
@@ -6732,7 +6735,7 @@ class MainActivity : AppCompatActivity() {
             if (canApplySae && clientSaeTotalPayment > 0) {
                 val saeBugyeol = netProperty - targetDebt >= 10000 || longTermFullyBlocked
                 val saeLabel = if (delinquentDays >= 90) "새" else "새새"
-                clientLongTermText.append("\n[새출발] ${clientSaeMonthly}만 / ${clientSaeYears}년납 / $saeLabel${if (saeBugyeol) " (부결고지)" else ""}")
+                clientLongTermText.append("\n[새출발] ${clientSaeMonthly}만 / ${clientSaeYears}년납 / $saeLabel${if (saeBugyeol && saeLabel != "새새") " (부결고지)" else ""}")
             } else if (hasBusinessHistory && isBusinessOwner && saeDebtOverLimit) {
                 clientLongTermText.append("\n[새출발] 새새 불가(채무한도초과 담보${formatToEok(totalSecuredDebt)})")
             } else if (hasBusinessHistory && isBusinessOwner && saePropertyExcess) {
