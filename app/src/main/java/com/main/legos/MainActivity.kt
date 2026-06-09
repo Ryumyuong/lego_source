@@ -250,39 +250,24 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 2단계: PDF 처리 (합의서/변제계획안=텍스트파싱, 상환내역서=이미지OCR, 기타=ML Kit OCR)
-        val ocrPdfUris = ArrayList<Pair<Uri, String>>()
-        for ((uri, fileName) in pdfUris) {
-            val lowerFileName = fileName.lowercase()
-            when {
-                lowerFileName.contains("합의") -> {
-                    // 합의서는 항상 Claude Vision으로 처리 (테이블 추출이 필요)
-                    Log.d("FILE_PROCESS", "합의서 → Claude Vision 처리 ($fileName)")
-                    ocrPdfUris.add(Pair(uri, fileName))
+        // 변제계획안이 암호화된 경우 비밀번호 팝업 → 순차 처리 후 OCR 대상 분리
+        processRecoveryPdfs(pdfUris) { ocrPdfUris ->
+            if (ocrPdfUris.isNotEmpty()) {
+                extractDataFromPdfImages(ocrPdfUris) { ocrResult ->
+                    if (ocrResult.defermentMonths > 0) {
+                        hwpText += "\n유예기간 ${ocrResult.defermentMonths}개월"
+                        if (ocrResult.defermentMonths > aiDefermentMonths) aiDefermentMonths = ocrResult.defermentMonths
+                        Log.d("FILE_PROCESS", "PDF OCR 유예기간 추출: ${ocrResult.defermentMonths}개월 → aiDefermentMonths=$aiDefermentMonths")
+                    }
+                    if (ocrResult.applicationDate.isNotEmpty()) {
+                        pdfApplicationDate = ocrResult.applicationDate
+                        Log.d("FILE_PROCESS", "PDF OCR 신청일자 추출: ${ocrResult.applicationDate}")
+                    }
+                    finishFileProcessing()
                 }
-                lowerFileName.contains("변제계획") || lowerFileName.contains("변제예정") -> {
-                    val text = extractPdfText(uri)
-                    if (text.length > 50) parseRecoveryPlanPdfText(text, fileName)
-                    else ocrPdfUris.add(Pair(uri, fileName))  // 이미지 PDF → OCR
-                }
-                else -> ocrPdfUris.add(Pair(uri, fileName))
-            }
-        }
-
-        if (ocrPdfUris.isNotEmpty()) {
-            extractDataFromPdfImages(ocrPdfUris) { ocrResult ->
-                if (ocrResult.defermentMonths > 0) {
-                    hwpText += "\n유예기간 ${ocrResult.defermentMonths}개월"
-                    if (ocrResult.defermentMonths > aiDefermentMonths) aiDefermentMonths = ocrResult.defermentMonths
-                    Log.d("FILE_PROCESS", "PDF OCR 유예기간 추출: ${ocrResult.defermentMonths}개월 → aiDefermentMonths=$aiDefermentMonths")
-                }
-                if (ocrResult.applicationDate.isNotEmpty()) {
-                    pdfApplicationDate = ocrResult.applicationDate
-                    Log.d("FILE_PROCESS", "PDF OCR 신청일자 추출: ${ocrResult.applicationDate}")
-                }
+            } else {
                 finishFileProcessing()
             }
-        } else {
-            finishFileProcessing()
         }
     }
 
@@ -1433,15 +1418,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============= PDF 텍스트 추출 =============
-    private fun extractPdfText(uri: Uri): String {
+    // PDF 텍스트 추출 결과 (needsPassword: 암호화되어 비밀번호 입력 필요)
+    private data class PdfExtractResult(val text: String, val needsPassword: Boolean)
+
+    private fun extractPdfText(uri: Uri, password: String? = null): String {
+        return extractPdfTextResult(uri, password).text
+    }
+
+    private fun extractPdfTextResult(uri: Uri, password: String?): PdfExtractResult {
         val sb = StringBuilder()
+        var needsPassword = false
         try {
             var document: com.tom_roush.pdfbox.pdmodel.PDDocument? = null
             try {
                 contentResolver.openInputStream(uri)?.use { inputStream ->
-                    document = com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputStream)
+                    document = if (!password.isNullOrEmpty()) {
+                        com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputStream, password)
+                    } else {
+                        com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputStream)
+                    }
                     Log.d("PDF_EXTRACT", "PDF 열기 성공")
                 }
+            } catch (e: com.tom_roush.pdfbox.pdmodel.encryption.InvalidPasswordException) {
+                needsPassword = true
+                Log.e("PDF_EXTRACT", "PDF 암호화됨, 비밀번호 필요: ${e.message}")
             } catch (e: Exception) {
                 Log.e("PDF_EXTRACT", "PDF 열기 실패: ${e.message}")
             }
@@ -1457,7 +1457,82 @@ class MainActivity : AppCompatActivity() {
             Log.e("PDF_EXTRACT", "PDF 추출 실패: ${e.message}")
             e.printStackTrace()
         }
-        return sb.toString()
+        return PdfExtractResult(sb.toString(), needsPassword)
+    }
+
+    // 암호화된 변제계획안 PDF 비밀번호 입력 팝업 (건너뛰기 시 null 반환)
+    private fun promptPdfPassword(fileName: String, onResult: (String?) -> Unit) {
+        val input = android.widget.EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            hint = "비밀번호"
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("비밀번호 입력")
+            .setMessage("$fileName 파일이 암호화되어 있습니다.\n비밀번호를 입력하세요.")
+            .setView(input)
+            .setPositiveButton("확인") { _, _ -> onResult(input.text.toString()) }
+            .setNegativeButton("건너뛰기") { _, _ -> onResult(null) }
+            .setCancelable(false)
+            .show()
+    }
+
+    // PDF 목록을 순차 처리: 변제계획안=텍스트파싱(+암호화 시 비번 팝업), 그 외=OCR 대상으로 분리
+    private fun processRecoveryPdfs(
+        pdfUris: List<Pair<Uri, String>>,
+        onComplete: (ArrayList<Pair<Uri, String>>) -> Unit
+    ) {
+        val ocrPdfUris = ArrayList<Pair<Uri, String>>()
+        fun processNext(index: Int) {
+            if (index >= pdfUris.size) {
+                onComplete(ocrPdfUris)
+                return
+            }
+            val (uri, fileName) = pdfUris[index]
+            val lowerFileName = fileName.lowercase()
+            when {
+                lowerFileName.contains("합의") -> {
+                    // 합의서는 항상 Claude Vision으로 처리 (테이블 추출이 필요)
+                    Log.d("FILE_PROCESS", "합의서 → Claude Vision 처리 ($fileName)")
+                    ocrPdfUris.add(Pair(uri, fileName))
+                    processNext(index + 1)
+                }
+                lowerFileName.contains("변제계획") || lowerFileName.contains("변제예정") -> {
+                    val res = extractPdfTextResult(uri, null)
+                    when {
+                        res.needsPassword -> {
+                            // 암호화된 변제계획안 → 비밀번호 팝업
+                            promptPdfPassword(fileName) { password ->
+                                if (password.isNullOrEmpty()) {
+                                    Log.d("FILE_PROCESS", "변제계획안 비밀번호 미입력 → 건너뜀 ($fileName)")
+                                    processNext(index + 1)  // 건너뛰고 계속
+                                } else {
+                                    val res2 = extractPdfTextResult(uri, password)
+                                    if (res2.text.length > 50) {
+                                        parseRecoveryPlanPdfText(res2.text, fileName)
+                                    } else {
+                                        Log.d("FILE_PROCESS", "변제계획안 비밀번호 불일치 → 건너뜀 ($fileName)")
+                                    }
+                                    processNext(index + 1)  // 실패해도 건너뛰고 계속
+                                }
+                            }
+                        }
+                        res.text.length > 50 -> {
+                            parseRecoveryPlanPdfText(res.text, fileName)
+                            processNext(index + 1)
+                        }
+                        else -> {
+                            ocrPdfUris.add(Pair(uri, fileName))  // 이미지 PDF → OCR
+                            processNext(index + 1)
+                        }
+                    }
+                }
+                else -> {
+                    ocrPdfUris.add(Pair(uri, fileName))
+                    processNext(index + 1)
+                }
+            }
+        }
+        processNext(0)
     }
 
     private fun getFileName(uri: Uri): String? {
@@ -1915,10 +1990,13 @@ class MainActivity : AppCompatActivity() {
             // 종료 조건: "대출과목"이 같은 라인에 없을 때만 (병합 라인 "[요약][대출과목]" 대응)
             if (preScanLoanCat && !l.contains("대출과목") && !l.contains("현황순번") && (l.contains("요약사항") || l.contains("최저납부") || l.contains("요약]") || l.contains("기타채무"))) preScanLoanCat = false
             // 대출과목 섹션 내 "신용" 표기 라인 → 해당 채권사명 수집 (담보 분류 무효화용)
-            if (preScanLoanCat && l.contains("신용") && !l.contains("담보") && !l.contains("할부") && !l.contains("리스")) {
+            // 대출과목 표가 단일 진실 소스: 대출과목이 "신용대출"이면 채무현황 종류(신차할부 등 할부/담보)가
+            // 같은 병합 라인에 있어도 대출과목 우선 → 신용으로 분류 (담보 수집 블록도 건너뜀)
+            val hasCreditLoan = l.contains("신용대출")
+            if (preScanLoanCat && (hasCreditLoan || (l.contains("신용") && !l.contains("담보") && !l.contains("할부") && !l.contains("리스")))) {
                 extractLoanCatCreditorNames(l, loanCatCreditCreditorNames)
             }
-            if (preScanLoanCat && (l.contains("담보") || l.contains("할부") || l.contains("리스") || l.contains("중도금") || l.contains("약관") || l.contains("후순위") || l.contains("보증금") || l.contains("전세") || l.contains("채무아님"))) {
+            if (preScanLoanCat && !hasCreditLoan && (l.contains("담보") || l.contains("할부") || l.contains("리스") || l.contains("중도금") || l.contains("약관") || l.contains("후순위") || l.contains("보증금") || l.contains("전세") || l.contains("채무아님"))) {
                 // 채권사명 추출 (순번이 없는 라인에서도 이름 매칭으로 담보 처리)
                 extractLoanCatCreditorNames(l, loanCatDamboCreditorNames)
                 // 보증서담보대출 → 지급보증(240) 분류용
@@ -2593,7 +2671,7 @@ class MainActivity : AppCompatActivity() {
             // "월 소득 N만" 직접 파싱 (AI 폴백용, 배우자소득 제외)
             // "수령액 없음/수령 없음" 등 실소득 없음 표현이 있으면 제외
             // ★ "순수익"이 명시되어 있으면 순수익 값 우선 사용 (예상/예정 키워드가 같이 있어도 순수익 우선)
-            if ((lineNoSpace.contains("월소득") || lineNoSpace.contains("연봉") || lineNoSpace.contains("순수익")) && !lineNoSpace.contains("배우자") && (lineNoSpace.contains("순수익") || (!lineNoSpace.contains("예상") && !lineNoSpace.contains("예정"))) && !inSpecialNotesSection) {
+            if ((lineNoSpace.contains("월소득") || lineNoSpace.contains("연봉") || lineNoSpace.contains("순수익")) && !lineNoSpace.contains("배우자") && (lineNoSpace.contains("순수익") || (!lineNoSpace.contains("예상") && !lineNoSpace.contains("예정"))) && !inSpecialNotesSection && !lineNoSpace.contains("특이사항")) {
                 if (lineNoSpace.contains("수령") && (lineNoSpace.contains("없") || lineNoSpace.contains("수령0") || lineNoSpace.contains("수령x") || lineNoSpace.contains("수령X"))) {
                     parsedMonthlyIncome = 0
                     Log.d("HWP_PARSE", "실수령액 없음 감지 → parsedMonthlyIncome 초기화 ($line)")
@@ -3081,6 +3159,16 @@ class MainActivity : AppCompatActivity() {
             // 대출사용처 (전역 감지로 이동됨 - 여기서는 추가 키워드만)
             // 도박/주식/코인은 위 전역 감지에서 처리
 
+            // 특이 자유서술 뒤에 실제 채무 행(번호+날짜.월.일+금융기관)이 오면 → 특이 섹션 종료 + 채무 섹션 진입
+            // (특이사항 칸이 [채무현황] 헤더 바로 위에 있어, spec이 켜진 채로 채무표에 진입해 채무 행이 특이로 흡수되는 양식 대응)
+            if (inSpecialNotesSection &&
+                Regex("\\d{2,4}\\.\\d{1,2}\\.\\d{1,2}").containsMatchIn(lineNoSpace) &&
+                (line.contains("은행") || line.contains("캐피탈") || line.contains("카드") || line.contains("저축"))) {
+                inSpecialNotesSection = false
+                inDebtSection = true
+                Log.d("HWP_PARSE", "채무 행 감지 → 특이 섹션 종료 + 채무 섹션 진입: $line")
+            }
+
             // 특이사항 (연속줄 지원)
             if (lineNoSpace.contains("특이사항") || lineNoSpace.contains("특이:") || lineNoSpace.contains("특이：")) {
                 inSpecialNotesSection = true
@@ -3553,9 +3641,11 @@ class MainActivity : AppCompatActivity() {
                     val creditorTokens = line.trim().split(Regex("\\s+"))
                     val creditorFinKws = listOf("은행", "캐피탈", "카드", "금융", "저축", "보증", "공사", "재단", "농협", "신협", "새마을", "생명", "화재", "공단", "대부", "뱅크", "피에프씨", "테크놀로지", "머니무브", "통신", "텔레콤", "모바일", "자산관리", "추심", "기금")
                     // 채권사: 날짜 토큰 바로 앞 위치 (테이블 4번째 열), 없으면 키워드 기반 폴백
-                    val dateTokenIdx = creditorTokens.indexOfFirst { it.matches(Regex("\\d{2,4}\\.\\d{1,2}\\..*")) }
+                    // 날짜 형식: YY.MM.DD(점2개) 또는 YY.MM(점1개) 모두 인식 (YY.MM이면 대출과목 종류명(카드론 등)이 채권사로 오인되는 것 방지)
+                    val dateTokenIdx = creditorTokens.indexOfFirst { it.matches(Regex("\\d{2,4}\\.\\d{1,2}(\\..*)?")) }
                     val creditorToken = if (dateTokenIdx > 0) creditorTokens[dateTokenIdx - 1]
-                        else creditorTokens.firstOrNull { tok -> creditorFinKws.any { tok.contains(it) } && !tok.contains("대출") && !tok.contains("지급보증") && !tok.contains("연대보증") }
+                        // 폴백: 대출과목 종류(카드론 등 "론" 끝/대출/보증)는 채권사가 아니므로 제외하고 금융기관 토큰만 선택
+                        else creditorTokens.firstOrNull { tok -> creditorFinKws.any { tok.contains(it) } && !tok.contains("대출") && !tok.endsWith("론") && !tok.contains("지급보증") && !tok.contains("연대보증") }
                     var rawCreditorName = creditorToken?.replace(Regex("\\([^)]*\\)"), "")?.replace(Regex("[\\s]"), "")?.trim() ?: ""
                     // PDF OCR 오인식 보정
                     if (hasPdfFile) {
@@ -4052,15 +4142,20 @@ class MainActivity : AppCompatActivity() {
         Log.d("HWP_CALC", "대상채무 (텍스트파싱): 총${totalParsedDebt}-담보${parsedDamboTotal}+카드${parsedCardUsageTotal} = ${targetDebt}만 | 카드맵=$cardUsageAmountMap")
 
         // 카드이용금액을 채권사맵에 합산 (과반 판단용: 채무현황표 "롯데카드[서울]" + 카드이용금액 "롯데카드" 매칭)
+        // 카드이용내역의 은행(농협/국민 등)과 채무현황의 같은 은행("농협은행")은 동일 채권사 → 과반 합산 (채권사 수 중복 방지)
         for ((cardName, cardAmt) in cardUsageAmountMap) {
             if (cardAmt <= 0) continue
             val cardBase = cardName.replace("카드", "")
+            val cardStem = cardBase.replace("은행", "")
             val matchKey = parsedCreditorMap.keys.firstOrNull { key ->
+                if (key == cardName) return@firstOrNull false  // 카드 0엔트리 자신 제외 → 채무현황 채권사 우선 매칭
                 val keyBase = key.replace(Regex("\\[.*"), "").replace("카드", "")
-                keyBase == cardBase || key.contains(cardName) || cardName.contains(keyBase + "카드")
+                keyBase == cardBase || key.contains(cardName) || cardName.contains(keyBase + "카드") ||
+                    (cardStem.length >= 2 && key.contains("은행") && keyBase.replace("은행", "") == cardStem)
             }
             if (matchKey != null) {
                 parsedCreditorMap[matchKey] = (parsedCreditorMap[matchKey] ?: 0) + cardAmt
+                parsedCreditorMap.remove(cardName)  // 카드 0엔트리 제거 (채무현황 은행과 동일 채권사로 합산됨)
             } else {
                 parsedCreditorMap[cardName] = (parsedCreditorMap[cardName] ?: 0) + cardAmt
             }
@@ -4261,9 +4356,14 @@ class MainActivity : AppCompatActivity() {
         val nonAffEntries = mutableListOf<Pair<String, Int>>()
         val otherDebtNameSet = otherDebtEntries.map { it.first }.toSet()
         val loanCatNameSet = loanCatRows.map { it.creditor }.filter { it.isNotBlank() }.toSet()
+        // 대출과목/채무종류(대출정보 컬럼) 판별: 채권사가 아니므로 협약/미협약 판단 제외
+        // ~대출/~론/~자금으로 끝나거나 현금서비스/리볼빙 등은 대출과목명 (실제 금융기관명은 이런 패턴으로 끝나지 않음)
+        fun isLoanCategoryName(n: String): Boolean = loanTypeNames.contains(n) ||
+            n.endsWith("대출") || n.endsWith("론") || n.endsWith("자금") ||
+            n.contains("현금서비스") || n.contains("리볼빙") || n.contains("이월약정")
         for ((name, amount) in parsedCreditorMap) {
-            if (loanTypeNames.contains(name)) {
-                Log.d("HWP_CALC", "대출유형명 (미협약 판단 제외): $name (${amount}만)")
+            if (isLoanCategoryName(name)) {
+                Log.d("HWP_CALC", "대출과목/유형명 (미협약 판단 제외): $name (${amount}만)")
                 continue
             }
             if (name in otherDebtNameSet) {
@@ -4309,6 +4409,7 @@ class MainActivity : AppCompatActivity() {
         // ★ 담보 채권사도 미협약 여부 체크 (대상채무 제외는 유지, 특이사항 표시만)
         val nonAffDamboNames = mutableListOf<String>()
         for (damboCreditor in parsedDamboCreditorNames) {
+            if (isLoanCategoryName(damboCreditor)) continue  // 대출과목명은 채권사 아님 → 협약/미협약 판단 제외
             val nameForCheck = if (damboCreditor.contains("대부")) damboCreditor.replace("대부", "") else damboCreditor
             if (!AffiliateList.isAffiliated(damboCreditor) && !AffiliateList.isAffiliated(nameForCheck)) {
                 val isFinancial = financialKeywords.any { damboCreditor.contains(it) }
@@ -4320,11 +4421,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         // ★ 과반 채권사 (parsedCreditorMap에서 기타채무 제외, [] 제거 후 합산)
-        // [] 제거하여 동일 기관 합산 (예: "현대카드[1]", "현대카드[2]" → "현대카드")
+        // [] 제거 + 끝 "은행" 제거하여 동일 기관 합산 (예: "현대카드[1]", "현대카드[2]" → "현대카드" / "농협", "농협은행" → "농협")
         val normalizedCreditorMap = mutableMapOf<String, Int>()
         for ((name, amount) in parsedCreditorMap) {
             if (name in otherDebtNameSet) continue
-            val normalizedName = name.replace(Regex("\\[.*?\\]"), "").trim()
+            val normalizedName = normalizeCreditorName(name)
             normalizedCreditorMap[normalizedName] = (normalizedCreditorMap[normalizedName] ?: 0) + amount
         }
         val majorEntry = normalizedCreditorMap.entries
@@ -4334,8 +4435,8 @@ class MainActivity : AppCompatActivity() {
             majorEntry.value.toDouble() / (targetDebt + nonAffiliatedDebt) > 0.5) majorEntry.key else ""
         val majorCreditorDebtFromParsing = if (majorCreditorFromParsing.isNotEmpty()) majorEntry!!.value else 0
 
-        // ★ 채권사 수
-        val parsedCreditorCount = parsedCreditorMap.size
+        // ★ 채권사 수 (동일 채권사 중복 제거: 농협[부산]=농협[서울]=농협=농협은행 → 1건)
+        val parsedCreditorCount = parsedCreditorMap.keys.map { normalizeCreditorName(it) }.filter { it.isNotBlank() }.distinct().size
         Log.d("HWP_CALC", "텍스트 파싱 채권사: ${parsedCreditorCount}건, 과반=${majorCreditorFromParsing}(${majorCreditorDebtFromParsing}만), 미협약=${nonAffiliatedDebt}만")
 
         // ★ 재산: 텍스트 파싱 기반 (AI 제거)
@@ -5094,8 +5195,8 @@ class MainActivity : AppCompatActivity() {
             specialNotesList.add("$effectiveMajorCreditor 과반 (${String.format("%.0f", majorCreditorRatio)}%)")
             Log.d("HWP_CALC", "과반 채권사 (AI): $effectiveMajorCreditor ${effectiveMajorDebt}만 / ${originalTargetDebt}만 = ${String.format("%.1f", majorCreditorRatio)}%")
         }
-        // 같은 은행에 신용+담보 동시 보유 → 특이사항 ([] 지점명 무시, 은행명으로 매칭)
-        for (bankName in parsedDamboCreditorNames.filter { it.replace(Regex("\\[.*?\\]"), "").trim() in normalizedCreditorMap }) {
+        // 같은 은행에 신용+담보 동시 보유 → 특이사항 ([] 지점명 무시, "은행" 접미 무시하여 은행명으로 매칭)
+        for (bankName in parsedDamboCreditorNames.filter { normalizeCreditorName(it) in normalizedCreditorMap }) {
             val cleanName = bankName.replace(Regex("\\[[^\\]]*\\]"), "").replace(Regex("（[^）]*）"), "").replace(Regex("\\([^)]*\\)"), "").trim()
             specialNotesList.add("$cleanName 신용+담보")
             Log.d("HWP_CALC", "신용+담보 동시 보유 채권사: $cleanName")
@@ -5906,7 +6007,7 @@ class MainActivity : AppCompatActivity() {
             }
             // 중간 회→유 변환: 사업자, 단순재산초과, 집경매 위험, 한국주택금융공사 집담보, 동일 채권사가 담보+신용 보유, 또는 대상채무 4000만 이하
             if (canDeferment) {
-                val hasSameCreditorDamboAndCredit = parsedDamboCreditorNames.any { it.replace(Regex("\\[.*?\\]"), "").trim() in normalizedCreditorMap }
+                val hasSameCreditorDamboAndCredit = parsedDamboCreditorNames.any { normalizeCreditorName(it) in normalizedCreditorMap }
                 Log.d("HWP_CALC", "회→유 변환 체크: label=$label, 사업자=$isBusinessOwner, 재산초과=$shortTermPropertyExcess, 집경매=$shortTermHomeAuctionRisk(reason=$shortTermBlockReason), 동일채권=$hasSameCreditorDamboAndCredit, 주택금융=$hasHfcMortgage, 소액=${targetDebt <= 4000}")
                 if (isBusinessOwner || shortTermPropertyExcess || shortTermHomeAuctionRisk || hasSameCreditorDamboAndCredit || hasHfcMortgage || targetDebt <= 4000) {
                     label = label.replace("신회워", "신유워").replace("프회워", "프유워")
@@ -5919,8 +6020,8 @@ class MainActivity : AppCompatActivity() {
         // 진단 라벨이 "회"로 끝나면 (예: 프유회, 신유회, 워유회) 장기 표기를 단기 기준으로 (단기monthly / 단기개월/12+1년)
         val labelEndsWithHoe = longTermDiagLabel.endsWith("회")
         val overrideMonthly = if (labelEndsWithHoe && shortTermMonthly > 0) shortTermMonthly else 0
-        // 8개월 기준 반올림 ((개월+3)/12: 나머지 9개월 이상 올림, 8개월 이하 내림)
-        val overrideYear = if (labelEndsWithHoe && shortTermMonths > 0) maxOf(1, (shortTermMonths + 3) / 12) else 0
+        // 8개월 기준 반올림 ((개월+3)/12: 나머지 9개월 이상 올림, 8개월 이하 내림) + 유예기간 1년 가산
+        val overrideYear = if (labelEndsWithHoe && shortTermMonths > 0) maxOf(1, (shortTermMonths + 3) / 12) + 1 else 0
         // 장기 불가 사유 수집
         val longTermBlockReasons = mutableListOf<String>()
         if (longTermDebtOverLimit) {
@@ -6097,7 +6198,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 중간 회→유 변환: 사업자, 단순재산초과, 집경매 위험, 한국주택금융공사 집담보, 동일 채권사가 담보+신용 보유, 또는 대상채무 4000만 이하
-        val hasSameCreditorDamboAndCredit = parsedDamboCreditorNames.any { it.replace(Regex("\\[.*?\\]"), "").trim() in normalizedCreditorMap }
+        val hasSameCreditorDamboAndCredit = parsedDamboCreditorNames.any { normalizeCreditorName(it) in normalizedCreditorMap }
         if (canDeferment && (isBusinessOwner || shortTermPropertyExcess || shortTermHomeAuctionRisk || hasSameCreditorDamboAndCredit || hasHfcMortgage || targetDebt <= 4000)) {
             if (diagnosis.contains("신회워") || diagnosis.contains("프회워")) {
                 diagnosis = diagnosis.replace("신회워", "신유워").replace("프회워", "프유워")
@@ -6151,6 +6252,14 @@ class MainActivity : AppCompatActivity() {
                 updatedText = updatedText.replace(
                     Regex("\\[장기\\] \\d+만 / \\d+(?:년|개월)납"),
                     "[장기] ${finalMonthly}만 / $longPeriodStr"
+                )
+            }
+            // 라벨 비회끝 → 회끝 동기화: 진단이 회로 끝나면(신유회 등) 장기 표기를 단기 회생 기준(단기monthly / 회생년수+1년)으로
+            else if (!longTermDiagLabel.endsWith("회") && diagnosisCore.endsWith("회") && shortTermMonthly > 0 && shortTermMonths > 0) {
+                val hoeYears = maxOf(1, (shortTermMonths + 3) / 12) + 1
+                updatedText = updatedText.replace(
+                    Regex("\\[장기\\] \\d+만 / \\d+(?:년|개월)납"),
+                    "[장기] ${shortTermMonthly}만 / ${hoeYears}년납"
                 )
             }
             longTermText.clear()
@@ -6725,7 +6834,7 @@ class MainActivity : AppCompatActivity() {
                 // 진행중 회생 추천((프유)회 등) → 거래처 [장기]도 회생(단기) 기준 금액 ([진단]과 일치)
                 val clientLabelEndsWithHoe = clientLtLabel.endsWith("회")
                 val clientDispMonthly = if (clientLabelEndsWithHoe && shortTermMonthlyForClient > 0) shortTermMonthlyForClient else clientMonthlyForDisplay
-                val clientPeriodStr = if (clientLabelEndsWithHoe && shortTermMonthsForClient > 0) "${maxOf(1, (shortTermMonthsForClient + 3) / 12)}년납"
+                val clientPeriodStr = if (clientLabelEndsWithHoe && shortTermMonthsForClient > 0) "${maxOf(1, (shortTermMonthsForClient + 3) / 12) + 1}년납"
                     else if (clientUseMonths) "${dispMonths}개월납" else "${clientFinalYear}년납"
                 val clientDiagSuffix = if (clientLtLabel.isNotEmpty()) " / $clientLtLabel" else ""
                 clientLongTermText.append("[장기] ${clientDispMonthly}만 / $clientPeriodStr$studentLoanLongSuffix$clientDiagSuffix")
@@ -6910,6 +7019,11 @@ class MainActivity : AppCompatActivity() {
         }
         return 0
     }
+
+    // 채권사명 정규화: [지점명] 제거 + 끝의 "은행" 제거 → 동일 채권사 매칭
+    // (농협[부산] = 농협[서울] = 농협 = 농협은행). 과반/신용+담보/채권사 수 계산에 공통 사용
+    private fun normalizeCreditorName(name: String): String =
+        name.replace(Regex("\\[.*?\\]"), "").trim().replace(Regex("은행$"), "").trim()
 
     private val debtResultKeywords = listOf("면책","면채","실효","폐지","기각","취하","완납","안되","안됬","거절","반려")
     private fun hasDebtResult(text: String) = debtResultKeywords.any { text.contains(it) }
@@ -7121,40 +7235,25 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 같은 이름의 PDF 텍스트 추출 후 처리 (합의서/변제계획안=텍스트파싱, 상환내역서=OCR)
-        val ocrPdfUris = ArrayList<Pair<Uri, String>>()
-        for (pdfUri in group.pdfUris) {
-            val pdfFileName = getFileName(pdfUri) ?: "PDF"
-            val lowerFileName = pdfFileName.lowercase()
-            when {
-                lowerFileName.contains("합의") -> {
-                    // 합의서는 항상 Claude Vision으로 처리 (테이블 추출이 필요)
-                    Log.d("BATCH", "합의서 → Claude Vision 처리 ($pdfFileName)")
-                    ocrPdfUris.add(Pair(pdfUri, pdfFileName))
+        // 변제계획안이 암호화된 경우 비밀번호 팝업 → 순차 처리 후 OCR 대상 분리
+        val pdfPairs = group.pdfUris.map { Pair(it, getFileName(it) ?: "PDF") }
+        processRecoveryPdfs(pdfPairs) { ocrPdfUris ->
+            if (ocrPdfUris.isNotEmpty()) {
+                extractDataFromPdfImages(ocrPdfUris) { ocrResult ->
+                    if (ocrResult.defermentMonths > 0) {
+                        hwpText += "\n유예기간 ${ocrResult.defermentMonths}개월"
+                        if (ocrResult.defermentMonths > aiDefermentMonths) aiDefermentMonths = ocrResult.defermentMonths
+                        Log.d("BATCH", "PDF OCR 유예기간 추출: ${ocrResult.defermentMonths}개월 → aiDefermentMonths=$aiDefermentMonths")
+                    }
+                    if (ocrResult.applicationDate.isNotEmpty()) {
+                        pdfApplicationDate = ocrResult.applicationDate
+                        Log.d("BATCH", "PDF OCR 신청일자 추출: ${ocrResult.applicationDate}")
+                    }
+                    finishFileProcessing()
                 }
-                lowerFileName.contains("변제계획") || lowerFileName.contains("변제예정") -> {
-                    val text = extractPdfText(pdfUri)
-                    if (text.length > 50) parseRecoveryPlanPdfText(text, pdfFileName)
-                    else ocrPdfUris.add(Pair(pdfUri, pdfFileName))  // 이미지 PDF → OCR
-                }
-                else -> ocrPdfUris.add(Pair(pdfUri, pdfFileName))
-            }
-        }
-
-        if (ocrPdfUris.isNotEmpty()) {
-            extractDataFromPdfImages(ocrPdfUris) { ocrResult ->
-                if (ocrResult.defermentMonths > 0) {
-                    hwpText += "\n유예기간 ${ocrResult.defermentMonths}개월"
-                    if (ocrResult.defermentMonths > aiDefermentMonths) aiDefermentMonths = ocrResult.defermentMonths
-                    Log.d("BATCH", "PDF OCR 유예기간 추출: ${ocrResult.defermentMonths}개월 → aiDefermentMonths=$aiDefermentMonths")
-                }
-                if (ocrResult.applicationDate.isNotEmpty()) {
-                    pdfApplicationDate = ocrResult.applicationDate
-                    Log.d("BATCH", "PDF OCR 신청일자 추출: ${ocrResult.applicationDate}")
-                }
+            } else {
                 finishFileProcessing()
             }
-        } else {
-            finishFileProcessing()
         }
     }
 
