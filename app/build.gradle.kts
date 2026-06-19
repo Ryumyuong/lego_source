@@ -18,8 +18,8 @@ android {
         applicationId = "com.main.legos"
         minSdk = 26
         targetSdk = 36
-        versionCode = 66
-        versionName = "76"
+        versionCode = 67
+        versionName = "77"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField(

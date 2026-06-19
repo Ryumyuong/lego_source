@@ -1208,7 +1208,7 @@ class MainActivity : AppCompatActivity() {
             .put("role", "user")
             .put("content", contentArr)
         val requestBody = JSONObject()
-            .put("model", "claude-opus-4-20250514")
+            .put("model", "claude-opus-4-8")
             .put("max_tokens", 4096)
             .put("system", "당신은 금융 문서 분석 전문가입니다. 여러 페이지의 이미지가 주어지면 모든 페이지를 빠짐없이 꼼꼼하게 확인합니다. 특히 문서 후반부에 있는 테이블도 반드시 확인합니다. JSON 형식으로만 응답합니다.")
             .put("messages", JSONArray().put(message))
