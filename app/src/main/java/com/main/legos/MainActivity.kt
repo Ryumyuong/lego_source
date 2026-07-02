@@ -4694,8 +4694,8 @@ class MainActivity : AppCompatActivity() {
         var effectiveMajorDebt = majorCreditorDebtFromParsing
         majorCreditorRatio = if (originalTargetDebt > 0 && effectiveMajorDebt > 0 && effectiveMajorCreditor !in majorExcluded) effectiveMajorDebt.toDouble() / originalTargetDebt * 100 else 0.0
 
-        // 변제율 결정 (기본 85% = 15%탕감)
-        var repaymentRate = 85
+        // 변제율 결정 (기본 60% = 40%탕감)
+        var repaymentRate = 60
         var rateReason = ""
         val guaranteeDaebuTotal = guaranteeDebtMan + daebuDebtMan
         val guaranteeDaebuRatio = if (originalTargetDebt > 0) guaranteeDaebuTotal.toDouble() / originalTargetDebt * 100 else 0.0
@@ -4709,17 +4709,17 @@ class MainActivity : AppCompatActivity() {
         val isGuaranteeDaebuMajor = (guaranteeDaebuHasBoth && guaranteeDaebuRatio >= 70) ||
                 (guaranteeDaebuOnlyGuarantee && guaranteeRatio >= 50) ||
                 (guaranteeDaebuOnlyDaebu && daebuRatio >= 50)
-        // 100%: 채무 4000만 이하
+        // 70%: 채무 4000만 이하
         if (originalTargetDebt <= 4000 && originalTargetDebt > 0) {
-            repaymentRate = 100; rateReason = "소액"
+            repaymentRate = 70; rateReason = "소액"
         }
-        // 100%: 1개 채권사 50% 이상
+        // 70%: 1개 채권사 50% 이상
         else if (majorCreditorRatio >= 50) {
-            repaymentRate = 100; rateReason = "과반"
+            repaymentRate = 70; rateReason = "과반"
         }
-        // 100%: 지급보증/대부 과반 (단독 50% / 병존 70%)
+        // 70%: 지급보증/대부 과반 (단독 50% / 병존 70%)
         else if (isGuaranteeDaebuMajor) {
-            repaymentRate = 100; rateReason = when {
+            repaymentRate = 70; rateReason = when {
                 guaranteeDaebuOnlyDaebu -> "대부 과반"
                 guaranteeDaebuOnlyGuarantee -> "지급보증 과반"
                 daebuDebtMan > guaranteeDebtMan * 1.5 -> "대부 과반"
@@ -4727,11 +4727,11 @@ class MainActivity : AppCompatActivity() {
                 else -> "지급보증/대부 과반"
             }
         }
-        // 80%: 대상채무 1억 이상 & 카드/캐피탈 50% 이상 (20%탕감)
+        // 50%: 대상채무 1억 이상 & 카드/캐피탈 50% 이상 (50%탕감)
         else if (originalTargetDebt >= 10000 && cardCapitalRatio >= 50) {
-            repaymentRate = 80; rateReason = "카드/캐피탈 과반"
+            repaymentRate = 50; rateReason = "카드/캐피탈 과반"
         }
-        Log.d("HWP_CALC", "변제율: ${repaymentRate}% (${rateReason.ifEmpty { "기본15%탕감" }}), 지급보증=${guaranteeDebtMan}만(${String.format("%.1f", guaranteeRatio)}%), 대부=${daebuDebtMan}만(${String.format("%.1f", daebuRatio)}%), 합계=${guaranteeDaebuTotal}만(${String.format("%.1f", guaranteeDaebuRatio)}%), 카드캐피탈=${cardCapitalDebtMan}만(${String.format("%.1f", cardCapitalRatio)}%)")
+        Log.d("HWP_CALC", "변제율: ${repaymentRate}% (${rateReason.ifEmpty { "기본40%탕감" }}), 지급보증=${guaranteeDebtMan}만(${String.format("%.1f", guaranteeRatio)}%), 대부=${daebuDebtMan}만(${String.format("%.1f", daebuRatio)}%), 합계=${guaranteeDaebuTotal}만(${String.format("%.1f", guaranteeDaebuRatio)}%), 카드캐피탈=${cardCapitalDebtMan}만(${String.format("%.1f", cardCapitalRatio)}%)")
 
         // ★ 이혼 + 양육비 미수급 → 본인이 양육하지 않으므로 미성년 부양 인정 불가
         // ★ 양육비 입금중(수급아님) + 금액 있음 → 이혼/재혼 무관 항상 공제 (소득에서 빠짐)
@@ -5081,7 +5081,7 @@ class MainActivity : AppCompatActivity() {
         val longTermIncome = if (childSupportDeduction > 0) income - childSupportDeduction else income
         val availableIncome = longTermIncome - livingCostShinbok
         val yearlyIncomeCalc = longTermIncome * 12
-        val totalPayment = (targetDebt * repaymentRate / 100.0).toInt()
+        var totalPayment = (targetDebt * repaymentRate / 100.0).toInt()
         val parentDeduction = if (parentCount > 0) 50 else 0
         var longTermIsFullPayment = totalPayment >= targetDebt && targetDebt > 0
 
@@ -5185,9 +5185,9 @@ class MainActivity : AppCompatActivity() {
             // 새새용 본인/공동명의 재산 (배우자단독명의 제외, 등본분리 시 이미 제외됨)
             val saeOwnProperty = if (!isRegistrySplit) maxOf(0, netProperty - regionSpouseProperty) else netProperty
             saeTotalPayment = when {
-                saeOwnProperty <= 0 -> (saeTargetDebt * 0.7).toInt()  // 본인/공동명의 재산 없음: 30% 탕감
+                saeOwnProperty <= 0 -> (saeTargetDebt * 0.5).toInt()  // 본인/공동명의 재산 없음: 50% 탕감
                 saeOwnProperty > saeTargetDebt / 2 -> saeTargetDebt - (maxOf(0, saeTargetDebt - saeOwnProperty) * 0.6).toInt()
-                else -> (saeTargetDebt * 0.7).toInt()
+                else -> (saeTargetDebt * 0.5).toInt()
             }
             // 소득/대상채무 비율로 기간 결정
             val incomeRatio = income.toDouble() / saeTargetDebt * 100
@@ -6332,11 +6332,75 @@ class MainActivity : AppCompatActivity() {
             Log.d("HWP_CALC", "장기라벨 동기화: $longTermDiagLabel → $diagnosisCore (진단=$diagnosis)")
         }
 
-        // 회워 진단 → 10%탕감(90%)으로 재조정 (기본 15%탕감보다 낮음)
-        if (diagnosis == "회워" && repaymentRate == 85) {
-            repaymentRate = 90
+        // 회워 진단 → 30%탕감(70%)으로 재조정 (기본 40%탕감보다 낮음)
+        if (diagnosis == "회워" && repaymentRate == 60) {
+            repaymentRate = 70
             rateReason = "회워"
-            Log.d("HWP_CALC", "회워 진단 → 변제율 90%(10%탕감)으로 재조정")
+            // 70% 재조정 → totalPayment 재계산 후 본체 [장기] 재산출 (totalPayment는 거래처 계산에도 그대로 전달되어 자동 반영)
+            totalPayment = (targetDebt * repaymentRate / 100.0).toInt()
+            longTermIsFullPayment = totalPayment >= targetDebt && targetDebt > 0
+            if (!longTermFullyBlocked && targetDebt > 0 && totalPayment > 0) {
+                var hoeResult = calcLongTermValues(
+                    totalPayment, targetDebt, longTermIncome, livingCostShinbok, livingCostTable, parentDeduction,
+                    householdForShinbok, parentCount, (isFreelancer || noSocialInsurance), longTermIsFullPayment,
+                    hasWolse, parsedDamboTotal,
+                    hasAuction, hasSeizure, hasGambling, hasStock, hasCrypto,
+                    recentDebtRatio, delinquentDays, hasOwnRealEstate,
+                    majorCreditorRatio, shortTermTotal,
+                    minMonthly = 40, maxMonths = 120
+                )
+                // 프리랜서 8년 → 비프리랜서 기준이 낮으면 채택 (본체 원 계산과 동일)
+                if (isFreelancer && hoeResult.finalYear == 8 && hoeResult.finalMonthly > 0) {
+                    val nf = calcLongTermValues(
+                        totalPayment, targetDebt, longTermIncome, livingCostShinbok, livingCostTable, parentDeduction,
+                        householdForShinbok, parentCount, false, longTermIsFullPayment,
+                        hasWolse, parsedDamboTotal,
+                        hasAuction, hasSeizure, hasGambling, hasStock, hasCrypto,
+                        recentDebtRatio, delinquentDays, hasOwnRealEstate,
+                        majorCreditorRatio, shortTermTotal,
+                        minMonthly = 40, maxMonths = 120
+                    )
+                    if (nf.finalMonthly in 1 until hoeResult.finalMonthly) hoeResult = nf
+                }
+                finalYear = hoeResult.finalYear
+                finalMonthly = hoeResult.finalMonthly
+                longTermUseMonths = hoeResult.useMonths
+                longTermDisplayMonths = hoeResult.displayMonths
+                // 1인가구+소득250↑ → 장기 -1년 (본체 원 계산과 동일)
+                if (finalYear > 2 && income >= 250 && householdForShinbok == 1 && parentCount > 0 && !(isFreelancer || noSocialInsurance)) {
+                    var candYear = finalYear - 1
+                    var newMonths = candYear * 12
+                    var candMonthly = if (newMonths > 0) {
+                        if (longTermIsFullPayment) maxOf(totalPayment / newMonths, 40) else (totalPayment + newMonths - 1) / newMonths
+                    } else finalMonthly
+                    if (!longTermIsFullPayment) candMonthly = candMonthly / 5 * 5
+                    while (candYear > 1 && candMonthly < 40) {
+                        candYear -= 1
+                        newMonths = candYear * 12
+                        candMonthly = if (newMonths > 0) {
+                            if (longTermIsFullPayment) maxOf(totalPayment / newMonths, 40) else (totalPayment + newMonths - 1) / newMonths
+                        } else candMonthly
+                        if (!longTermIsFullPayment) candMonthly = candMonthly / 5 * 5
+                    }
+                    val availableForLong = availableIncome - parentDeduction
+                    if (!(availableForLong > 0 && candMonthly > availableForLong)) {
+                        finalYear = candYear
+                        finalMonthly = candMonthly
+                        if (longTermUseMonths) longTermDisplayMonths = newMonths
+                    }
+                }
+                // [장기] 금액 갱신 (회워는 회끝 아님 → override 없음)
+                if (finalYear > 0 && finalMonthly > 0) {
+                    val periodStr = if (longTermUseMonths && longTermDisplayMonths > 0) "${longTermDisplayMonths}개월납" else "${finalYear}년납"
+                    val updated = longTermText.toString().replace(
+                        Regex("\\[장기\\] \\d+만 / \\d+(?:년|개월)납"),
+                        "[장기] ${finalMonthly}만 / $periodStr"
+                    )
+                    longTermText.clear()
+                    longTermText.append(updated)
+                }
+            }
+            Log.d("HWP_CALC", "회워 진단 → 변제율 70%(30%탕감) 재조정: totalPayment=${totalPayment}만, 장기 ${finalMonthly}만/${finalYear}년")
         }
 
         var finalDiagnosis = if (diagnosisNote.isNotEmpty()) "$diagnosis $diagnosisNote" else diagnosis
@@ -6346,7 +6410,7 @@ class MainActivity : AppCompatActivity() {
         if (diagnosis != "방생") {
             val daebuRatio = if (originalTargetDebt > 0) daebuDebtMan.toDouble() / originalTargetDebt * 100 else 0.0
             // 단기 가능하면 장기 부결고지 제외 (신복위 부결되어도 회생으로 대체 가능)
-            val isLongTermBugyeol = ((repaymentRate == 100 && originalTargetDebt > 4000) || daebuRatio > 50 || (repaymentRate == 100 && majorCreditorRatio >= 50) || ownRealEstateCount == 2) && shortTermTotal <= 0
+            val isLongTermBugyeol = ((repaymentRate == 70 && originalTargetDebt > 4000) || daebuRatio > 50 || (repaymentRate == 70 && majorCreditorRatio >= 50) || ownRealEstateCount == 2) && shortTermTotal <= 0
             if (isLongTermBugyeol) {
                 val newLt = longTermText.toString().replace(Regex("(\\[장기\\][^\n]*)")) { mr ->
                     val line = mr.value
@@ -6938,7 +7002,7 @@ class MainActivity : AppCompatActivity() {
             }
             // 부결고지 적용 (단기 가능하면 제외 - 신복위 부결되어도 회생으로 대체 가능)
             val daebuRatioClient = if (originalTargetDebt > 0) daebuDebtMan.toDouble() / originalTargetDebt * 100 else 0.0
-            val isClientBugyeol = ((repaymentRate == 100 && originalTargetDebt > 4000) || daebuRatioClient > 50 || (repaymentRate == 100 && majorCreditorRatio >= 50) || ownRealEstateCount == 2) && shortTermTotal <= 0
+            val isClientBugyeol = ((repaymentRate == 70 && originalTargetDebt > 4000) || daebuRatioClient > 50 || (repaymentRate == 70 && majorCreditorRatio >= 50) || ownRealEstateCount == 2) && shortTermTotal <= 0
             if (isClientBugyeol) {
                 val newClt = clientLongTermText.toString().replace(Regex("(\\[장기\\][^\n]*)")) { mr ->
                     val line = mr.value
